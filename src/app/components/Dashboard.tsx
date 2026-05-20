@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import Link from 'next/link';
 import { useDropzone } from 'react-dropzone';
 import { uploadMarkdownFile, deleteMarkdownFile, logout } from '../actions';
-import { LogOut, Copy, Check, Trash2, FileText, Upload } from 'lucide-react';
+import { LogOut, Copy, Check, Trash2, FileText, Upload, ExternalLink } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 
 interface FileRecord {
@@ -196,38 +197,47 @@ export default function Dashboard({ files }: DashboardProps) {
                     >
                       <td className="py-4 px-4 font-medium flex items-center gap-2 max-w-xs md:max-w-md truncate">
                         <FileText size={14} className="shrink-0 text-muted-foreground" />
-                        <span className="truncate group-hover:text-foreground text-foreground/80 transition-colors">
-                          {file.file_name}
-                        </span>
+                        <Link
+                          href={`/${file.short_id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="group/link inline-flex items-center gap-1.5 truncate hover:underline text-foreground/80 group-hover:text-foreground hover:text-foreground transition-colors cursor-pointer"
+                          title="Open shared document in new tab"
+                        >
+                          <span className="truncate">{file.file_name}</span>
+                          <ExternalLink size={12} className="opacity-0 group-hover/link:opacity-100 transition-opacity text-muted-foreground shrink-0" />
+                        </Link>
                       </td>
                       <td className="py-4 px-4 text-muted-foreground">
                         {formatDate(file.created_at)}
                       </td>
-                      <td className="py-4 px-4 text-right space-x-2 shrink-0">
-                        <button
-                          onClick={() => handleCopyLink(file.short_id)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-foreground/25 hover:border-foreground transition-all uppercase tracking-wider text-[10px] font-bold cursor-pointer"
-                        >
-                          {copiedId === file.short_id ? (
-                            <>
-                              <Check size={10} />
-                              COPIED
-                            </>
-                          ) : (
-                            <>
-                              <Copy size={10} />
-                              COPY LINK
-                            </>
-                          )}
-                        </button>
-                        <button
-                          onClick={() => handleDelete(file.id, file.storage_path)}
-                          disabled={deletingId === file.id}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-red-500/30 text-red-500 hover:bg-red-500 hover:text-white transition-all uppercase tracking-wider text-[10px] font-bold disabled:opacity-50 cursor-pointer"
-                        >
-                          <Trash2 size={10} />
-                          {deletingId === file.id ? 'DELETING...' : 'DELETE'}
-                        </button>
+                      <td className="py-4 px-4 shrink-0">
+                        <div className="flex flex-col items-end gap-1.5">
+                          <button
+                            onClick={() => handleCopyLink(file.short_id)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-foreground/25 hover:border-foreground hover:bg-foreground hover:text-background transition-all uppercase tracking-wider text-[10px] font-bold cursor-pointer min-w-[100px] justify-center"
+                          >
+                            {copiedId === file.short_id ? (
+                              <>
+                                <Check size={10} />
+                                COPIED
+                              </>
+                            ) : (
+                              <>
+                                <Copy size={10} />
+                                COPY LINK
+                              </>
+                            )}
+                          </button>
+                          <button
+                            onClick={() => handleDelete(file.id, file.storage_path)}
+                            disabled={deletingId === file.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-red-500/30 text-red-500 hover:bg-red-500 hover:text-white transition-all uppercase tracking-wider text-[10px] font-bold disabled:opacity-50 cursor-pointer min-w-[100px] justify-center"
+                          >
+                            <Trash2 size={10} />
+                            {deletingId === file.id ? 'DELETING...' : 'DELETE'}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

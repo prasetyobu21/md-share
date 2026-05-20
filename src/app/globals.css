@@ -69,3 +69,40 @@ button, input, select, textarea, div, a {
   background: var(--muted);
 }
 
+/* Premium Typography Spacing & Rhythm Overrides */
+.prose h1 {
+  margin-top: 3.5rem !important;
+  margin-bottom: 0.75rem !important;
+}
+
+.prose h2 {
+  margin-top: 2.75rem !important;
+  margin-bottom: 0.625rem !important;
+}
+
+.prose h3 {
+  margin-top: 2.25rem !important;
+  margin-bottom: 0.5rem !important;
+}
+
+/* Ensure the first heading has no top margin to prevent awkward gaps at the top */
+.prose > :first-child,
+.prose > :first-child :is(h1, h2, h3, h4),
+.prose > :is(h1, h2, h3, h4):first-of-type {
+  margin-top: 0 !important;
+}
+
+/* Optimize spacing for paragraphs */
+.prose p {
+  margin-top: 0 !important;
+  margin-bottom: 1.125rem !important;
+}
+
+/* Optimize list spacing */
+.prose :is(ul, ol) {
+  margin-top: 0.5rem !important;
+  margin-bottom: 1.25rem !important;
+}
+
+
+

@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MD SHARE SITE",
+  title: "Share your md note/file",
   description: "A stark, hyper-minimalist markdown file sharing space.",
 };
 

@@ -1,5 +1,6 @@
 import { supabaseServer } from '@/lib/supabase';
 import { notFound } from 'next/navigation';
+import { Metadata } from 'next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CopyButton from './CopyButton';
@@ -10,6 +11,26 @@ export const dynamic = 'force-dynamic';
 
 interface PageProps {
   params: Promise<{ short_id: string }>;
+}
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { short_id } = await params;
+  const { data: fileMeta } = await supabaseServer
+    .from('files')
+    .select('file_name')
+    .eq('short_id', short_id)
+    .maybeSingle();
+
+  if (!fileMeta) {
+    return {
+      title: 'File Not Found - Share your md note/file',
+    };
+  }
+
+  const cleanName = fileMeta.file_name.replace(/\.md$/, '');
+  return {
+    title: `${cleanName} - Share your md note/file`,
+  };
 }
 
 export default async function ReaderPage({ params }: PageProps) {
@@ -100,8 +121,8 @@ export default async function ReaderPage({ params }: PageProps) {
           <article className="prose prose-zinc dark:prose-invert max-w-none font-sans leading-relaxed selection:bg-foreground selection:text-background
             prose-headings:font-mono prose-headings:uppercase prose-headings:tracking-tight prose-headings:font-bold
             prose-h1:text-xl prose-h1:border-b prose-h1:border-foreground/10 prose-h1:pb-2
-            prose-h2:text-lg prose-h2:pt-4
-            prose-h3:text-sm prose-h3:pt-2
+            prose-h2:text-lg
+            prose-h3:text-sm
             prose-p:text-sm prose-p:text-foreground/90 prose-p:leading-8
             prose-a:underline prose-a:text-foreground prose-a:font-mono prose-a:text-xs prose-a:hover:text-muted-foreground transition-colors
             prose-code:font-mono prose-code:text-xs prose-code:bg-foreground/[0.04] prose-code:dark:bg-foreground/[0.08] prose-code:px-1.5 prose-code:py-0.5 prose-code:border prose-code:border-foreground/15 prose-code:before:content-none prose-code:after:content-none

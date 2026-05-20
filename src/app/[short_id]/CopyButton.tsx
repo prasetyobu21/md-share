@@ -17,7 +17,7 @@ export default function CopyButton() {
   return (
     <button
       onClick={handleCopy}
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-foreground/30 hover:border-foreground transition-all uppercase tracking-wider text-[10px] font-bold cursor-pointer"
+      className="inline-flex items-center justify-center gap-1.5 h-[36px] px-4 border border-foreground/30 hover:border-foreground hover:bg-foreground hover:text-background transition-all uppercase tracking-wider text-[10px] font-bold cursor-pointer"
     >
       {copied ? (
         <>
