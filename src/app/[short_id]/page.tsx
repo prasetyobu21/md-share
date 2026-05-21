@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import CopyButton from './CopyButton';
 import ThemeToggle from '../components/ThemeToggle';
 import { Calendar, FileText, ExternalLink } from 'lucide-react';
+import { isAuthenticated } from '../actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,7 +18,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const { short_id } = await params;
   const { data: fileMeta } = await supabaseServer
     .from('files')
-    .select('file_name')
+    .select('file_name, is_accessible, expires_at')
     .eq('short_id', short_id)
     .maybeSingle();
 
@@ -27,11 +28,63 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     };
   }
 
+  const adminAuth = await isAuthenticated();
+  const isAccessible = fileMeta.is_accessible;
+  const expiresAt = fileMeta.expires_at;
+  const hasExpired = expiresAt ? new Date().getTime() > new Date(expiresAt).getTime() : false;
+
+  if (!adminAuth && (!isAccessible || hasExpired)) {
+    return {
+      title: 'Access Restricted - Share your md note/file',
+    };
+  }
+
   const cleanName = fileMeta.file_name.replace(/\.md$/, '');
   return {
     title: `${cleanName} - Share your md note/file`,
   };
 }
+
+const formatTakedownTime = (utcString: string, tzString: string) => {
+  try {
+    const d = new Date(utcString);
+    const options: Intl.DateTimeFormatOptions = {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: 'UTC',
+    };
+    
+    const TIMEZONES = [
+      { value: 'GMT+7', offset: 7 },
+      { value: 'GMT+8', offset: 8 },
+      { value: 'GMT+9', offset: 9 },
+      { value: 'GMT+0', offset: 0 },
+      { value: 'GMT-5', offset: -5 },
+      { value: 'GMT-8', offset: -8 },
+    ];
+    
+    const tz = TIMEZONES.find(t => t.value === tzString) || { offset: 7 };
+    const offsetMs = tz.offset * 60 * 60 * 1000;
+    const adjustedDate = new Date(d.getTime() + offsetMs);
+    
+    const formatter = new Intl.DateTimeFormat('en-US', options);
+    const parts = formatter.formatToParts(adjustedDate);
+    
+    const year = parts.find(p => p.type === 'year')?.value;
+    const month = parts.find(p => p.type === 'month')?.value;
+    const day = parts.find(p => p.type === 'day')?.value;
+    const hour = parts.find(p => p.type === 'hour')?.value;
+    const minute = parts.find(p => p.type === 'minute')?.value;
+    
+    return `${day} ${month} ${year} AT ${hour}:${minute} (${tzString})`;
+  } catch (e) {
+    return 'N/A';
+  }
+};
 
 export default async function ReaderPage({ params }: PageProps) {
   const { short_id } = await params;
@@ -45,6 +98,25 @@ export default async function ReaderPage({ params }: PageProps) {
 
   if (!fileMeta) {
     notFound();
+  }
+
+  // 1b. Check if access is restricted
+  const adminAuth = await isAuthenticated();
+  const isAccessible = fileMeta.is_accessible;
+  const expiresAt = fileMeta.expires_at;
+  const hasExpired = expiresAt ? new Date().getTime() > new Date(expiresAt).getTime() : false;
+
+  if (!adminAuth && (!isAccessible || hasExpired)) {
+    return (
+      <div className="flex flex-col min-h-screen items-center justify-center px-4 bg-background font-mono">
+        <div className="w-full max-w-lg border-2 border-foreground bg-background p-8 text-center text-foreground rounded-none">
+          <h1 className="text-sm font-black uppercase tracking-widest mb-4">ACCESS RESTRICTED</h1>
+          <p className="text-xs uppercase tracking-wider text-muted-foreground leading-relaxed">
+            This link is no longer active. If you need access to this file, please request a new share link from the owner.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   // 2. Fetch raw markdown content from storage
@@ -100,13 +172,29 @@ export default async function ReaderPage({ params }: PageProps) {
               <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground uppercase tracking-widest">
                 <FileText size={12} />
                 <span>SHARED DOCUMENT</span>
+                {(!isAccessible || hasExpired) && (
+                  <span className="px-2 py-0.5 border border-foreground text-[10px] font-bold bg-foreground text-background shrink-0 select-none">ADMIN PREVIEW</span>
+                )}
               </div>
               <h1 className="text-xl md:text-2xl font-black uppercase tracking-tight break-all">
                 {fileMeta.file_name.replace(/\.md$/, '')}
               </h1>
-              <div className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground uppercase tracking-wider">
-                <Calendar size={12} />
-                <span>PUBLISHED: {formatDate(fileMeta.created_at)}</span>
+              <div className="space-y-2.5">
+                <div className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground uppercase tracking-wider">
+                  <Calendar size={12} />
+                  <span>PUBLISHED: {formatDate(fileMeta.created_at)}</span>
+                </div>
+                {fileMeta.expires_at && (
+                  <div className="flex items-center gap-1.5 text-xs font-mono text-muted-foreground uppercase tracking-wider">
+                    <span className={`w-1.5 h-1.5 rounded-none shrink-0 ${hasExpired ? 'bg-foreground/45 animate-none' : 'bg-foreground animate-pulse'}`} />
+                    <span>
+                      {hasExpired 
+                        ? `LINK EXPIRED ON: ${formatTakedownTime(fileMeta.expires_at, fileMeta.timezone || 'GMT+7')}`
+                        : `You can access this file until: ${formatTakedownTime(fileMeta.expires_at, fileMeta.timezone || 'GMT+7')}`
+                      }
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
             <div className="shrink-0 flex items-center gap-3">
@@ -118,6 +206,7 @@ export default async function ReaderPage({ params }: PageProps) {
 
         {/* Prose Body */}
         <main className="pb-16">
+
           <article className="prose prose-zinc dark:prose-invert max-w-none font-sans leading-relaxed selection:bg-foreground selection:text-background
             prose-headings:font-mono prose-headings:uppercase prose-headings:tracking-tight prose-headings:font-bold
             prose-h1:text-xl prose-h1:border-b prose-h1:border-foreground/10 prose-h1:pb-2

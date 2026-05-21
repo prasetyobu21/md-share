@@ -352,3 +352,70 @@ export async function deleteMarkdownFile(
     return { success: false, error: err?.message || 'An unexpected error occurred during deletion.' };
   }
 }
+
+// Flips is_accessible to false and clears expires_at
+export async function takedownFile(id: string): Promise<{ success: boolean; error?: string }> {
+  // 1. Auth check
+  const auth = await isAuthenticated();
+  if (!auth) {
+    return { success: false, error: 'Unauthorized.' };
+  }
+
+  try {
+    const { error: dbError } = await supabaseServer
+      .from('files')
+      .update({
+        is_accessible: false,
+        expires_at: null,
+      })
+      .eq('id', id);
+
+    if (dbError) {
+      console.error('Database takedown error:', dbError);
+      return { success: false, error: `Database update failed: ${dbError.message}` };
+    }
+
+    revalidatePath('/');
+    return { success: true };
+  } catch (err: any) {
+    console.error('Unexpected takedown error:', err);
+    return { success: false, error: err?.message || 'An unexpected error occurred during takedown.' };
+  }
+}
+
+// Updates sharing state: is_accessible, expires_at, and timezone
+export async function updateSharingState(
+  id: string,
+  isAccessible: boolean,
+  expiresAt: string | null,
+  timezone: string = 'GMT+7'
+): Promise<{ success: boolean; error?: string }> {
+  // 1. Auth check
+  const auth = await isAuthenticated();
+  if (!auth) {
+    return { success: false, error: 'Unauthorized.' };
+  }
+
+  try {
+    const { error: dbError } = await supabaseServer
+      .from('files')
+      .update({
+        is_accessible: isAccessible,
+        expires_at: expiresAt,
+        timezone: timezone,
+      })
+      .eq('id', id);
+
+    if (dbError) {
+      console.error('Database update sharing state error:', dbError);
+      return { success: false, error: `Database update failed: ${dbError.message}` };
+    }
+
+    revalidatePath('/');
+    return { success: true };
+  } catch (err: any) {
+    console.error('Unexpected update sharing state error:', err);
+    return { success: false, error: err?.message || 'An unexpected error occurred.' };
+  }
+}
+

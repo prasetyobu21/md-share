@@ -9,7 +9,10 @@ CREATE TABLE IF NOT EXISTS public.files (
     short_id TEXT NOT NULL UNIQUE,
     file_name TEXT NOT NULL,
     storage_path TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    is_accessible BOOLEAN DEFAULT false,
+    expires_at TIMESTAMP WITH TIME ZONE NULL,
+    timezone TEXT DEFAULT 'GMT+7'
 );
 
 -- 2. Add an index on short_id for hyper-fast readers route queries
@@ -34,6 +37,14 @@ USING (true);
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('md-files', 'md-files', false)
 ON CONFLICT (id) DO NOTHING;
+
+-- ==========================================
+-- MIGRATION FOR EXISTING DB INSTALLATIONS
+-- Run these statements if you already have the files table created:
+-- ==========================================
+-- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS is_accessible BOOLEAN DEFAULT false;
+-- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE NULL;
+-- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'GMT+7';
 
 -- 6. Create public storage bucket for image files (shares)
 -- Inserts a record into storage.buckets to create a public bucket named 'shares' if it does not exist
