@@ -25,6 +25,9 @@ test.describe('MD Share - Live Site E2E Verification', () => {
     const errorNotice = page.locator('text=ERROR:');
     await expect(errorNotice).toBeVisible();
     await expect(errorNotice).toContainText('Incorrect password.');
+
+    // Save screenshot directly inside the unified test-results folder
+    await page.screenshot({ path: 'test-results/auth-failure.png' });
   });
 
   test('Accessing a non-existent short_id triggers a 404 status code', async ({ page }) => {
@@ -33,6 +36,9 @@ test.describe('MD Share - Live Site E2E Verification', () => {
 
     // 2. notFound() in Next.js serves a 404 response code
     expect(response?.status()).toBe(404);
+
+    // Save screenshot directly inside the unified test-results folder
+    await page.screenshot({ path: 'test-results/invalid-id-404.png' });
   });
 
   test('Homepage handles admin login and accesses dashboard', async ({ page }) => {
@@ -68,5 +74,8 @@ test.describe('MD Share - Live Site E2E Verification', () => {
       // Already logged in (session persisted via cookie)
       await expect(page.locator('button:has-text("LOGOUT")').first()).toBeVisible();
     }
+
+    // Save screenshot directly inside the unified test-results folder
+    await page.screenshot({ path: 'test-results/admin-dashboard.png' });
   });
 });
