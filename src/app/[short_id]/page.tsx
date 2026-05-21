@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CopyButton from './CopyButton';
 import ThemeToggle from '../components/ThemeToggle';
-import { Calendar, FileText } from 'lucide-react';
+import { Calendar, FileText, ExternalLink } from 'lucide-react';
 
 export const dynamic = 'force-dynamic';
 
@@ -136,7 +136,25 @@ export default async function ReaderPage({ params }: PageProps) {
             prose-th:border-b prose-th:border-foreground/30 prose-th:py-2 prose-th:px-3 prose-th:font-bold
             prose-td:border-b prose-td:border-foreground/10 prose-td:py-2 prose-td:px-3
           ">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                a: ({ href, children, ...props }) => {
+                  return (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-0.5 hover:text-muted-foreground transition-colors"
+                      {...props}
+                    >
+                      {children}
+                      <ExternalLink size={10} className="inline shrink-0 opacity-80" />
+                    </a>
+                  );
+                }
+              }}
+            >
               {markdownContent}
             </ReactMarkdown>
           </article>
