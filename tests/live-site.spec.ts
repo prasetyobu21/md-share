@@ -1,0 +1,37 @@
+import { test, expect } from '@playwright/test';
+
+test.describe('MD Share - Live Site E2E Verification', () => {
+
+  test('Homepage renders AuthWall and handles incorrect authentication attempts', async ({ page }) => {
+    // 1. Visit homepage
+    await page.goto('/');
+
+    // 2. Expect the Title/Header elements of the Administration Wall to be visible
+    await expect(page.locator('h1')).toHaveText('MD SHARE');
+    await expect(page.locator('text=Administration Wall')).toBeVisible();
+
+    // 3. Look for the password input field
+    const passwordInput = page.locator('input[placeholder="ENTER ADMIN PASSWORD"]');
+    await expect(passwordInput).toBeVisible();
+
+    // 4. Fill in an incorrect password
+    await passwordInput.fill('INCORRECT_PASSWORD_123');
+
+    // 5. Click the access button
+    const accessButton = page.locator('button:has-text("ACCESS WORKSPACE")');
+    await accessButton.click();
+
+    // 6. Verify that the system handles auth failure and displays the error notice
+    const errorNotice = page.locator('text=ERROR:');
+    await expect(errorNotice).toBeVisible();
+    await expect(errorNotice).toContainText('Incorrect password.');
+  });
+
+  test('Accessing a non-existent short_id triggers a 404 status code', async ({ page }) => {
+    // 1. Visit an invalid/non-existent short_id
+    const response = await page.goto('/invalid-short-id-123456');
+
+    // 2. notFound() in Next.js serves a 404 response code
+    expect(response?.status()).toBe(404);
+  });
+});
