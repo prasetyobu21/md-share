@@ -9,7 +9,10 @@ CREATE TABLE IF NOT EXISTS public.files (
     short_id TEXT NOT NULL UNIQUE,
     file_name TEXT NOT NULL,
     storage_path TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    is_accessible BOOLEAN DEFAULT false,
+    expires_at TIMESTAMP WITH TIME ZONE NULL,
+    timezone TEXT DEFAULT 'GMT+7'
 );
 
 -- 2. Add an index on short_id for hyper-fast readers route queries
@@ -35,9 +38,11 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('md-files', 'md-files', false)
 ON CONFLICT (id) DO NOTHING;
 
--- RLS policies for the private storage bucket:
--- Since upload and delete operations are performed using the Supabase Service Role Client
--- from Next.js server actions, they bypass Storage RLS by default.
--- Public reads of markdown files will also happen through the server-side Next.js route,
--- which uses the Service Role Client to fetch raw data. Therefore, no public read/write 
--- storage policies are required, securing the files completely from direct public download URLs.
+-- ==========================================
+-- MIGRATION FOR EXISTING DB INSTALLATIONS
+-- Run these statements if you already have the files table created:
+-- ==========================================
+-- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS is_accessible BOOLEAN DEFAULT false;
+-- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE NULL;
+-- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'GMT+7';
+
