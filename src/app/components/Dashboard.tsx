@@ -3,8 +3,8 @@
 import { useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useDropzone } from 'react-dropzone';
-import { uploadMarkdownFile, deleteMarkdownFile, logout, takedownFile, updateSharingState } from '../actions';
-import { LogOut, Copy, Check, Trash2, FileText, Upload, ExternalLink, X, ChevronRight } from 'lucide-react';
+import { uploadMarkdownFile, deleteMarkdownFile, logout, takedownFile, updateSharingState, finalizeUploadWithImages } from '../actions';
+import { LogOut, Copy, Check, Trash2, FileText, Upload, ExternalLink, X, ChevronRight, Image as ImageIcon, AlertTriangle } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 
 interface FileRecord {
@@ -58,7 +58,27 @@ export default function Dashboard({ files }: DashboardProps) {
     setTimeout(() => setToastMessage(''), 2500);
   };
 
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
+  // Missing images intercept state
+  const [missingImagesModalOpen, setMissingImagesModalOpen] = useState(false);
+  const [missingImagesList, setMissingImagesList] = useState<string[]>([]);
+  const [providedImages, setProvidedImages] = useState<Record<string, File>>({});
+  const [interceptedFileMeta, setInterceptedFileMeta] = useState<{
+    shortId: string;
+    markdownContent: string;
+    fileName: string;
+  } | null>(null);
+  const [imagesUploading, setImagesUploading] = useState(false);
+  const [dragOverSlot, setDragOverSlot] = useState<string | null>(null);
+
+  const onDrop = useCallback(async (acceptedFiles: File[], fileRejections: any[]) => {
+    console.log('Client: onDrop triggered.', { acceptedFiles, fileRejections });
+
+    if (fileRejections.length > 0) {
+      const errorMsg = `FILE REJECTED: ${fileRejections[0].errors[0]?.message || 'Invalid file type'}. ONLY .MD FILES ARE ALLOWED.`;
+      console.warn('Client: File drop rejected:', errorMsg);
+      setUploadError(errorMsg.toUpperCase());
+      return;
+    }
     if (acceptedFiles.length === 0) return;
     setUploading(true);
     setUploadError('');
@@ -69,9 +89,27 @@ export default function Dashboard({ files }: DashboardProps) {
     formData.append('file', file);
 
     try {
+      console.log('Client: Uploading markdown file:', file.name);
       const res = await uploadMarkdownFile(formData);
+      console.log('Client: Server response received:', res);
+
       if (res.success) {
         setUploadSuccess(`SUCCESSFULLY UPLOADED: ${file.name}`);
+      } else if (res.status === 'missing_images') {
+        console.log('Client: Intercepted missing images:', res.missingImages);
+        if (res.missingImages && res.shortId && typeof res.markdownContent === 'string' && res.fileName) {
+          setMissingImagesList(res.missingImages);
+          setInterceptedFileMeta({
+            shortId: res.shortId,
+            markdownContent: res.markdownContent,
+            fileName: res.fileName
+          });
+          setProvidedImages({});
+          setMissingImagesModalOpen(true);
+        } else {
+          console.warn('Client: Intercepted missing_images but some metadata fields were missing or invalid:', res);
+          setUploadError(`UPLOAD INTERCEPTED BUT RESPONSE METADATA WAS INCOMPLETE.`);
+        }
       } else {
         setUploadError(`UPLOAD FAILED: ${res.error || 'Unknown error'}`);
       }
@@ -86,10 +124,75 @@ export default function Dashboard({ files }: DashboardProps) {
     onDrop,
     accept: {
       'text/markdown': ['.md'],
+      'text/plain': ['.md'],
+      'text/x-markdown': ['.md'],
+      'application/octet-stream': ['.md'],
     },
     maxFiles: 1,
     disabled: uploading,
   });
+
+  const handleSelectImageForSlot = (imgName: string, file: File) => {
+    setProvidedImages(prev => ({
+      ...prev,
+      [imgName]: file
+    }));
+  };
+
+  const handleRemoveImageForSlot = (imgName: string) => {
+    setProvidedImages(prev => {
+      const next = { ...prev };
+      delete next[imgName];
+      return next;
+    });
+  };
+
+  const handleCancelUpload = () => {
+    setMissingImagesModalOpen(false);
+    setMissingImagesList([]);
+    setProvidedImages({});
+    setInterceptedFileMeta(null);
+    setUploadError('');
+  };
+
+  const handleFinalizeUpload = async () => {
+    if (!allImagesProvided || !interceptedFileMeta) return;
+
+    setImagesUploading(true);
+    setUploadError('');
+    setUploadSuccess('');
+
+    try {
+      const formData = new FormData();
+      formData.append('shortId', interceptedFileMeta.shortId);
+      formData.append('fileName', interceptedFileMeta.fileName);
+      formData.append('markdownContent', interceptedFileMeta.markdownContent);
+
+      // Map provided images to their expected slot name in the formData payload!
+      Object.entries(providedImages).forEach(([requiredName, file]) => {
+        const renamedFile = new File([file], requiredName, { type: file.type });
+        formData.append('images', renamedFile);
+      });
+
+      const res = await finalizeUploadWithImages(formData);
+      if (res.success) {
+        setUploadSuccess(`SUCCESSFULLY UPLOADED: ${interceptedFileMeta.fileName} WITH ${Object.keys(providedImages).length} IMAGES`);
+        setMissingImagesModalOpen(false);
+        setProvidedImages({});
+        setInterceptedFileMeta(null);
+      } else {
+        setUploadError(`UPLOAD FAILED: ${res.error || 'Unknown error'}`);
+      }
+    } catch (err: any) {
+      setUploadError(`ERROR: ${err?.message || 'An error occurred during upload'}`);
+    } finally {
+      setImagesUploading(false);
+    }
+  };
+
+  const allImagesProvided = missingImagesList.every(imgName =>
+    !!providedImages[imgName]
+  );
 
   const handleCopyLink = (shortId: string) => {
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
@@ -566,6 +669,155 @@ export default function Dashboard({ files }: DashboardProps) {
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 border-2 border-foreground bg-background text-foreground font-mono text-[10px] font-bold tracking-widest uppercase px-6 py-3.5 shadow-none rounded-none animate-toast select-none">
           {toastMessage}
+        </div>
+      )}
+
+      {/* Missing Images Modal */}
+      {missingImagesModalOpen && (
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-background border-2 border-foreground p-8 max-w-lg w-full rounded-none font-mono text-xs uppercase relative space-y-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] dark:shadow-[8px_8px_0px_0px_rgba(255,255,255,1)] animate-in fade-in zoom-in duration-200">
+            {/* Modal Header */}
+            <div className="flex justify-between items-start border-b border-foreground pb-4">
+              <div className="space-y-1">
+                <h3 className="text-sm font-black tracking-widest flex items-center gap-2">
+                  <AlertTriangle className="text-amber-500 animate-pulse" size={16} />
+                  INTERCEPTED: MISSING IMAGES
+                </h3>
+                <p className="text-[10px] text-muted-foreground">
+                  Your markdown file references local images that must be uploaded.
+                </p>
+              </div>
+              <button
+                onClick={handleCancelUpload}
+                className="p-1 border border-foreground/20 hover:border-foreground hover:bg-foreground hover:text-background transition-colors cursor-pointer"
+                title="Cancel upload"
+              >
+                <X size={14} />
+              </button>
+            </div>
+
+            {/* Missing Files Checklist Slots */}
+            <div className="space-y-4">
+              <span className="font-bold tracking-widest text-[11px] block border-b border-foreground/15 pb-2">
+                / RESOLVE REQUIRED ASSET SLOTS ({Object.keys(providedImages).length} OF {missingImagesList.length} READY)
+              </span>
+              
+              <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                {missingImagesList.map((imgName, index) => {
+                  const providedFile = providedImages[imgName];
+                  const isDragOver = dragOverSlot === imgName;
+                  
+                  return (
+                    <div
+                      key={imgName}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        setDragOverSlot(imgName);
+                      }}
+                      onDragLeave={(e) => {
+                        e.preventDefault();
+                        setDragOverSlot(null);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setDragOverSlot(null);
+                        const file = e.dataTransfer.files?.[0];
+                        if (file && file.type.startsWith('image/')) {
+                          handleSelectImageForSlot(imgName, file);
+                        }
+                      }}
+                      className={`border p-3.5 transition-all duration-150 rounded-none relative flex flex-col gap-3 ${
+                        providedFile
+                          ? 'border-foreground bg-foreground/[0.01]'
+                          : isDragOver
+                          ? 'border-foreground bg-foreground/5 scale-[1.01]'
+                          : 'border-foreground/20 text-muted-foreground border-dashed hover:border-foreground/50'
+                      }`}
+                    >
+                      {/* Slot Header */}
+                      <div className="flex justify-between items-center font-mono">
+                        <span className="font-bold text-[10px] tracking-wider flex items-center gap-2">
+                          <span className="bg-foreground text-background w-4 h-4 flex items-center justify-center font-bold text-[9px] rounded-none">
+                            {index + 1}
+                          </span>
+                          SLOT: <span className="underline select-all text-foreground font-black">{imgName}</span>
+                        </span>
+                        <span className={`text-[9px] font-bold uppercase tracking-wider ${providedFile ? 'text-foreground font-black' : 'text-muted-foreground/70'}`}>
+                          {providedFile ? '✓ READY' : '✗ MISSING'}
+                        </span>
+                      </div>
+
+                      {/* Slot Body */}
+                      {providedFile ? (
+                        <div className="flex items-center justify-between bg-foreground/5 p-2 border border-foreground/20 font-mono text-[10px] text-foreground">
+                          <span className="truncate flex items-center gap-2 pr-4">
+                            <ImageIcon size={12} className="shrink-0" />
+                            <span className="font-bold truncate">{providedFile.name}</span>
+                            <span className="text-[8px] text-muted-foreground shrink-0 uppercase">
+                              ({(providedFile.size / 1024).toFixed(1)} KB)
+                            </span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveImageForSlot(imgName)}
+                            className="text-[8px] font-bold border border-red-500/40 text-red-500 hover:bg-red-500 hover:text-white px-2 py-1 transition-all cursor-pointer shrink-0 uppercase rounded-none"
+                          >
+                            REMOVE
+                          </button>
+                        </div>
+                      ) : (
+                        <div
+                          onClick={() => {
+                            const el = document.getElementById(`file-input-${imgName}`);
+                            if (el) (el as HTMLInputElement).click();
+                          }}
+                          className="group cursor-pointer p-3 border border-foreground/5 hover:border-foreground/30 bg-foreground/[0.005] hover:bg-foreground/[0.02] transition-all text-center flex flex-col items-center justify-center gap-1"
+                        >
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            id={`file-input-${imgName}`}
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                handleSelectImageForSlot(imgName, file);
+                              }
+                            }}
+                          />
+                          <Upload size={14} className="text-muted-foreground/60 group-hover:text-foreground transition-colors stroke-[1.5]" />
+                          <p className="text-[9px] text-muted-foreground/70 group-hover:text-foreground transition-colors font-mono uppercase font-bold tracking-wider">
+                            DROP IMAGE OR CLICK TO BROWSE FOR SLOT {index + 1}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex gap-4 pt-2">
+              <button
+                onClick={handleCancelUpload}
+                className="flex-1 py-3 border border-foreground/30 hover:border-foreground transition-all uppercase tracking-wider text-[10px] font-bold cursor-pointer rounded-none text-center"
+              >
+                CANCEL
+              </button>
+              <button
+                onClick={handleFinalizeUpload}
+                disabled={!allImagesProvided || imagesUploading}
+                className={`flex-1 py-3 border uppercase tracking-wider text-[10px] font-bold cursor-pointer rounded-none text-center transition-all ${
+                  allImagesProvided && !imagesUploading
+                    ? 'border-foreground bg-foreground text-background hover:bg-background hover:text-foreground'
+                    : 'border-foreground/20 text-muted-foreground opacity-50 cursor-not-allowed'
+                }`}
+              >
+                {imagesUploading ? 'FINALIZING...' : 'FINALIZE UPLOAD'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

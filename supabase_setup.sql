@@ -46,3 +46,16 @@ ON CONFLICT (id) DO NOTHING;
 -- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE NULL;
 -- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'GMT+7';
 
+-- 6. Create public storage bucket for image files (shares)
+-- Inserts a record into storage.buckets to create a public bucket named 'shares' if it does not exist
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('shares', 'shares', true)
+ON CONFLICT (id) DO NOTHING;
+
+-- RLS policies for the private storage bucket:
+-- Since upload and delete operations are performed using the Supabase Service Role Client
+-- from Next.js server actions, they bypass Storage RLS by default.
+-- Public reads of markdown files will also happen through the server-side Next.js route,
+-- which uses the Service Role Client to fetch raw data. Therefore, no public read/write 
+-- storage policies are required, securing the files completely from direct public download URLs.
+

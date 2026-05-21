@@ -3,7 +3,9 @@
 import { cookies } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import crypto from 'crypto';
+import sharp from 'sharp';
 import { supabaseServer } from '@/lib/supabase';
+import { scanForLocalImages, rewriteMarkdownImages, ImagePlaceholder } from '@/utils/markdown';
 
 // Helper to check if the current request is authenticated
 export async function isAuthenticated(): Promise<boolean> {
@@ -56,6 +58,8 @@ export async function logout(): Promise<void> {
   revalidatePath('/');
 }
 
+// Helpers moved to '@/utils/markdown' to comply with Next.js Server Actions async rule
+
 // Generates a random 8-character hex short ID
 function generateShortId(): string {
   return crypto.randomBytes(4).toString('hex');
@@ -64,7 +68,15 @@ function generateShortId(): string {
 // Uploads a markdown file to private storage and database
 export async function uploadMarkdownFile(
   formData: FormData
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{
+  success: boolean;
+  status?: 'missing_images' | 'completed';
+  missingImages?: string[];
+  shortId?: string;
+  markdownContent?: string;
+  fileName?: string;
+  error?: string;
+}> {
   // 1. Auth check
   const auth = await isAuthenticated();
   if (!auth) {
@@ -84,6 +96,25 @@ export async function uploadMarkdownFile(
   try {
     // Read markdown text
     const textContent = await file.text();
+    console.log(`Server: Processing upload for file: ${file.name}. Content size: ${textContent.length} bytes.`);
+
+    // Scan for local images
+    const localImages = scanForLocalImages(textContent);
+    console.log(`Server: Scanned for local images. Found count: ${localImages.length}. Matches:`, localImages);
+
+    if (localImages.length > 0) {
+      // Pause final submission and return missing image metadata
+      console.log('Server: Halting final submission. Returning missing images intercept to client.');
+      return {
+        success: false,
+        status: 'missing_images',
+        missingImages: localImages.map(img => img.filename),
+        shortId: generateShortId(),
+        markdownContent: textContent,
+        fileName: file.name,
+      };
+    }
+
     const shortId = generateShortId();
     const storagePath = `${shortId}.md`;
 
@@ -119,6 +150,146 @@ export async function uploadMarkdownFile(
 
     // 5. Success and revalidate
     revalidatePath('/');
+    return { success: true, status: 'completed' };
+  } catch (err: any) {
+    console.error('Unexpected upload error:', err);
+    return { success: false, error: err?.message || 'An unexpected error occurred during upload.' };
+  }
+}
+
+// Finalizes upload of markdown file after uploading missing images
+export async function finalizeUploadWithImages(
+  formData: FormData
+): Promise<{ success: boolean; error?: string }> {
+  // 1. Auth check
+  const auth = await isAuthenticated();
+  if (!auth) {
+    return { success: false, error: 'Unauthorized.' };
+  }
+
+  const shortId = formData.get('shortId') as string;
+  const fileName = formData.get('fileName') as string;
+  const markdownContent = formData.get('markdownContent') as string;
+
+  if (!shortId || !fileName || !markdownContent) {
+    return { success: false, error: 'Missing required upload parameters.' };
+  }
+
+  const imageFiles = formData.getAll('images') as File[];
+
+  try {
+    const imageUrls: Record<string, string> = {};
+    const uploadedStoragePaths: string[] = [];
+
+    // Programmatically check and create public 'shares' bucket if not exist
+    try {
+      const { data: buckets } = await supabaseServer.storage.listBuckets();
+      if (!buckets?.some(b => b.name === 'shares')) {
+        await supabaseServer.storage.createBucket('shares', {
+          public: true,
+          allowedMimeTypes: ['image/*'],
+        });
+      }
+    } catch (bucketErr) {
+      console.warn('Failed to ensure bucket exists, continuing upload:', bucketErr);
+    }
+
+    // Upload each image file to public 'shares' bucket (converting to WebP)
+    for (const imageFile of imageFiles) {
+      const originalFilename = imageFile.name;
+      
+      // Extract file buffer for sharp
+      const arrayBuffer = await imageFile.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      
+      let webpBuffer: Buffer;
+      let isConverted = false;
+
+      try {
+        // SVG vectors should not be rasterized to WebP
+        const isSvg = originalFilename.toLowerCase().endsWith('.svg');
+        if (!isSvg) {
+          console.log(`Server: Converting ${originalFilename} to WebP on-the-fly...`);
+          webpBuffer = await sharp(buffer)
+            .webp({ quality: 80 })
+            .toBuffer();
+          isConverted = true;
+        } else {
+          webpBuffer = buffer;
+        }
+      } catch (sharpErr) {
+        console.warn(`Server: Sharp WebP conversion failed for ${originalFilename}, falling back to original buffer:`, sharpErr);
+        webpBuffer = buffer;
+      }
+
+      const baseName = originalFilename.substring(0, originalFilename.lastIndexOf('.')) || originalFilename;
+      const finalFilename = isConverted ? `${baseName}.webp` : originalFilename;
+      const contentType = isConverted ? 'image/webp' : imageFile.type;
+      const imagePath = `${shortId}/${finalFilename}`;
+
+      const { error: imgUploadError } = await supabaseServer.storage
+        .from('shares')
+        .upload(imagePath, webpBuffer, {
+          contentType: contentType,
+          cacheControl: '31536000',
+          upsert: true,
+        });
+
+      if (imgUploadError) {
+        console.error(`Failed to upload image ${finalFilename}:`, imgUploadError);
+        return { success: false, error: `Image upload failed for ${finalFilename}: ${imgUploadError.message}` };
+      }
+
+      uploadedStoragePaths.push(imagePath);
+
+      // Get absolute public URL
+      const { data: publicUrlData } = supabaseServer.storage
+        .from('shares')
+        .getPublicUrl(imagePath);
+
+      // Key the map under the ORIGINAL filename so the markdown rewriter matches it
+      imageUrls[originalFilename] = publicUrlData.publicUrl;
+      console.log(`Server: Successfully uploaded image. Original: ${originalFilename} -> Public WebP: ${publicUrlData.publicUrl}`);
+    }
+
+    // Rewrite markdown image URLs
+    const rewrittenMarkdown = rewriteMarkdownImages(markdownContent, imageUrls);
+    const storagePath = `${shortId}.md`;
+
+    // Upload rewrited markdown to private storage 'md-files'
+    const { error: uploadError } = await supabaseServer.storage
+      .from('md-files')
+      .upload(storagePath, rewrittenMarkdown, {
+        contentType: 'text/markdown',
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError);
+      return { success: false, error: `Storage upload failed: ${uploadError.message}` };
+    }
+
+    // Insert record into PostgreSQL files table
+    const { error: dbError } = await supabaseServer
+      .from('files')
+      .insert({
+        short_id: shortId,
+        file_name: fileName,
+        storage_path: storagePath,
+      });
+
+    if (dbError) {
+      console.error('Database insertion error:', dbError);
+      // Attempt cleanup of markdown file and uploaded WebP images
+      await supabaseServer.storage.from('md-files').remove([storagePath]);
+      if (uploadedStoragePaths.length > 0) {
+        await supabaseServer.storage.from('shares').remove(uploadedStoragePaths);
+      }
+      return { success: false, error: `Database insertion failed: ${dbError.message}` };
+    }
+
+    revalidatePath('/');
     return { success: true };
   } catch (err: any) {
     console.error('Unexpected upload error:', err);
@@ -145,8 +316,21 @@ export async function deleteMarkdownFile(
 
     if (storageError) {
       console.error('Storage delete error:', storageError);
-      // We still proceed to try and delete db record if storage fails, or report error.
-      // But typically, we want both deleted. Let's log it.
+    }
+
+    // Clean up associated public images in shares bucket
+    const shortId = storagePath.replace(/\.md$/, '');
+    try {
+      const { data: filesInFolder, error: listError } = await supabaseServer.storage
+        .from('shares')
+        .list(shortId);
+
+      if (filesInFolder && filesInFolder.length > 0 && !listError) {
+        const pathsToDelete = filesInFolder.map(f => `${shortId}/${f.name}`);
+        await supabaseServer.storage.from('shares').remove(pathsToDelete);
+      }
+    } catch (err) {
+      console.error('Failed to clean up images from shares storage:', err);
     }
 
     // 3. Remove record from database
