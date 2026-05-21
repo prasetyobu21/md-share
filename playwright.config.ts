@@ -9,7 +9,7 @@ export default defineConfig({
   use: {
     baseURL: 'https://md.prasetyoutomo.com',
     trace: 'on-first-retry',
-    screenshot: 'only-on-failure',
+    screenshot: 'on',
   },
   projects: [
     {
