@@ -4,9 +4,9 @@ import { Metadata } from 'next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CopyButton from './CopyButton';
-import ThemeToggle from '../components/ThemeToggle';
+import ThemeToggle from '../../components/ThemeToggle';
 import { Calendar, FileText, ExternalLink } from 'lucide-react';
-import { isAuthenticated } from '../actions';
+import { isAuthenticated } from '../../actions';
 
 export const dynamic = 'force-dynamic';
 

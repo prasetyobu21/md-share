@@ -196,7 +196,7 @@ export default function Dashboard({ files }: DashboardProps) {
 
   const handleCopyLink = (shortId: string) => {
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const shareUrl = `${origin}/${shortId}`;
+    const shareUrl = `${origin}/share/${shortId}`;
     navigator.clipboard.writeText(shareUrl);
     setCopiedId(shortId);
     setTimeout(() => setCopiedId(null), 2000);
@@ -233,7 +233,7 @@ export default function Dashboard({ files }: DashboardProps) {
   const triggerShareModal = (file: FileRecord) => {
     setActiveFile(file);
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    setShareUrl(`${origin}/${file.short_id}`);
+    setShareUrl(`${origin}/share/${file.short_id}`);
     
     // Reset inputs
     const tomorrow = new Date();
@@ -420,7 +420,7 @@ export default function Dashboard({ files }: DashboardProps) {
                       <td className="py-4 px-4 font-medium flex items-center gap-2 max-w-xs md:max-w-md truncate">
                         <FileText size={14} className="shrink-0 text-muted-foreground" />
                         <Link
-                          href={`/${file.short_id}`}
+                          href={`/share/${file.short_id}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="group/link inline-flex items-center gap-1.5 truncate hover:underline text-foreground/80 group-hover:text-foreground hover:text-foreground transition-colors cursor-pointer"
