@@ -140,6 +140,9 @@ export default async function ReaderPage({ params }: PageProps) {
   let markdownContent = '';
   try {
     markdownContent = await fileBlob.text();
+    // Normalize custom bullet characters (e.g. •, ·, ▪, ◦, ●) to standard hyphens
+    // so ReactMarkdown renders them as proper list items rather than plain text.
+    markdownContent = markdownContent.replace(/(^[ \t]*)[•·▪◦●][ \t]+/gm, '$1- ');
   } catch (err) {
     console.error('Text decoding error:', err);
     return (
@@ -218,7 +221,7 @@ export default async function ReaderPage({ params }: PageProps) {
             prose-pre:bg-foreground/[0.03] prose-pre:dark:bg-foreground/[0.06] prose-pre:border prose-pre:border-foreground/15 prose-pre:p-4 prose-pre:rounded-none prose-pre:overflow-x-auto
             prose-pre:code:bg-transparent prose-pre:code:border-none prose-pre:code:p-0 prose-pre:code:px-0 prose-pre:code:py-0
             prose-ol:font-mono prose-ol:text-xs
-            prose-ul:list-square prose-ul:text-sm
+            prose-ul:list-disc prose-ul:text-sm
             prose-li:my-1
             prose-blockquote:border-l-2 prose-blockquote:border-foreground prose-blockquote:pl-4 prose-blockquote:italic prose-blockquote:text-muted-foreground
             prose-table:border-collapse prose-table:w-full prose-table:text-xs prose-table:font-mono
