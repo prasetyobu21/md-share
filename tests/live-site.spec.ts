@@ -32,7 +32,7 @@ test.describe('MD Share - Live Site E2E Verification', () => {
 
   test('Accessing a non-existent short_id triggers a 404 status code', async ({ page }) => {
     // 1. Visit an invalid/non-existent short_id
-    const response = await page.goto('/invalid-short-id-123456');
+    const response = await page.goto('/share/invalid-short-id-123456');
 
     // 2. notFound() in Next.js serves a 404 response code
     expect(response?.status()).toBe(404);
