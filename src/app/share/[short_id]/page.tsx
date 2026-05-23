@@ -7,6 +7,8 @@ import CopyButton from './CopyButton';
 import ThemeToggle from '../../components/ThemeToggle';
 import { Calendar, FileText, ExternalLink } from 'lucide-react';
 import { isAuthenticated } from '../../actions';
+import { cookies } from 'next/headers';
+import PasswordPrompt from './PasswordPrompt';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +20,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const { short_id } = await params;
   const { data: fileMeta } = await supabaseServer
     .from('files')
-    .select('file_name, is_accessible, expires_at')
+    .select('file_name, is_accessible, expires_at, password')
     .eq('short_id', short_id)
     .maybeSingle();
 
@@ -36,6 +38,17 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   if (!adminAuth && (!isAccessible || hasExpired)) {
     return {
       title: 'Access Restricted - Share your md note/file',
+    };
+  }
+
+  // Password check for metadata protection
+  const cookieStore = await cookies();
+  const passwordCookie = cookieStore.get(`share_pass_${short_id}`)?.value;
+  const isPasswordCorrect = passwordCookie === fileMeta.password;
+
+  if (!adminAuth && fileMeta.password && !isPasswordCorrect) {
+    return {
+      title: 'Password Protected - Share your md note/file',
     };
   }
 
@@ -117,6 +130,15 @@ export default async function ReaderPage({ params }: PageProps) {
         </div>
       </div>
     );
+  }
+
+  // 1c. Check if password protection is active
+  const cookieStore = await cookies();
+  const passwordCookie = cookieStore.get(`share_pass_${short_id}`)?.value;
+  const isPasswordCorrect = passwordCookie === fileMeta.password;
+
+  if (!adminAuth && fileMeta.password && !isPasswordCorrect) {
+    return <PasswordPrompt shortId={short_id} />;
   }
 
   // 2. Fetch raw markdown content from storage

@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import Link from 'next/link';
 import { useDropzone } from 'react-dropzone';
 import { uploadMarkdownFile, deleteMarkdownFile, logout, takedownFile, updateSharingState, finalizeUploadWithImages } from '../actions';
-import { LogOut, Copy, Check, Trash2, FileText, Upload, ExternalLink, X, ChevronRight, Image as ImageIcon, AlertTriangle } from 'lucide-react';
+import { LogOut, Copy, Check, Trash2, FileText, Upload, ExternalLink, X, ChevronRight, Image as ImageIcon, AlertTriangle, Lock, Unlock, Eye, EyeOff, RefreshCw, MoreVertical } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 
 interface FileRecord {
@@ -16,6 +16,7 @@ interface FileRecord {
   is_accessible: boolean;
   expires_at: string | null;
   timezone: string;
+  password?: string | null;
 }
 
 const TIMEZONES = [
@@ -52,6 +53,32 @@ export default function Dashboard({ files }: DashboardProps) {
   const [shareUrl, setShareUrl] = useState('');
   const [updatingState, setUpdatingState] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+
+  // Password Protection State
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [modalPassword, setModalPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [copiedPassword, setCopiedPassword] = useState(false);
+
+  // Kebab Dropdown State
+  const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.kebab-menu-container')) {
+        setActiveDropdownId(null);
+      }
+    };
+
+    if (activeDropdownId) {
+      document.addEventListener('click', handleOutsideClick);
+    }
+    return () => {
+      document.removeEventListener('click', handleOutsideClick);
+    };
+  }, [activeDropdownId]);
 
   const triggerToast = (message: string) => {
     setToastMessage(message);
@@ -241,6 +268,12 @@ export default function Dashboard({ files }: DashboardProps) {
     setExpiresDate(tomorrow.toISOString().split('T')[0]);
     setExpiresTime('23:59');
     setTimezone('GMT+7');
+
+    // Reset password state
+    setIsPrivate(false);
+    setModalPassword('');
+    setShowPassword(false);
+    setCopiedPassword(false);
     
     setModalStep('select');
     setModalOpen(true);
@@ -248,9 +281,14 @@ export default function Dashboard({ files }: DashboardProps) {
 
   const handleShareForever = async () => {
     if (!activeFile) return;
+    if (isPrivate && !modalPassword.trim()) {
+      alert('PLEASE ENTER OR GENERATE A PASSWORD');
+      return;
+    }
     setUpdatingState(true);
     try {
-      const res = await updateSharingState(activeFile.id, true, null);
+      const pwd = isPrivate ? modalPassword.trim() : null;
+      const res = await updateSharingState(activeFile.id, true, null, 'GMT+7', pwd);
       if (res.success) {
         setModalStep('success');
       } else {
@@ -265,6 +303,10 @@ export default function Dashboard({ files }: DashboardProps) {
 
   const handleConfirmSchedule = async () => {
     if (!activeFile || !expiresDate) return;
+    if (isPrivate && !modalPassword.trim()) {
+      alert('PLEASE ENTER OR GENERATE A PASSWORD');
+      return;
+    }
     setUpdatingState(true);
     try {
       const localDateTimeStr = `${expiresDate}T${expiresTime}:00`;
@@ -286,8 +328,9 @@ export default function Dashboard({ files }: DashboardProps) {
       }
       
       const utcTimestamp = utcDate.toISOString();
+      const pwd = isPrivate ? modalPassword.trim() : null;
 
-      const res = await updateSharingState(activeFile.id, true, utcTimestamp, timezone);
+      const res = await updateSharingState(activeFile.id, true, utcTimestamp, timezone, pwd);
       if (res.success) {
         setModalStep('success');
       } else {
@@ -402,13 +445,13 @@ export default function Dashboard({ files }: DashboardProps) {
               NO FILES HAVE BEEN SHARED YET. UPLOAD A FILE ABOVE TO BEGIN.
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-visible">
               <table className="w-full text-left font-mono border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-foreground/30 text-muted-foreground uppercase tracking-wider">
                     <th className="py-3 px-4 font-bold">File Name</th>
                     <th className="py-3 px-4 font-bold w-32">Created At</th>
-                    <th className="py-3 px-4 text-right font-bold w-48">Actions</th>
+                    <th className="py-3 px-4 text-right font-bold w-24">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-foreground/10">
@@ -419,6 +462,11 @@ export default function Dashboard({ files }: DashboardProps) {
                     >
                       <td className="py-4 px-4 font-medium flex items-center gap-2 max-w-xs md:max-w-md truncate">
                         <FileText size={14} className="shrink-0 text-muted-foreground" />
+                        {file.password && (
+                          <span title="Password Protected Link" className="shrink-0 flex items-center">
+                            <Lock size={12} className="text-foreground/70" />
+                          </span>
+                        )}
                         <Link
                           href={`/share/${file.short_id}`}
                           target="_blank"
@@ -433,51 +481,93 @@ export default function Dashboard({ files }: DashboardProps) {
                       <td className="py-4 px-4 text-muted-foreground">
                         {formatDate(file.created_at)}
                       </td>
-                      <td className="py-4 px-4 shrink-0">
-                        <div className="flex flex-col items-end gap-1.5">
-                          <div className="flex gap-2">
-                            {file.is_accessible && (!file.expires_at || new Date().getTime() < new Date(file.expires_at).getTime()) ? (
-                              <>
-                                <button
-                                  onClick={() => handleCopyLink(file.short_id)}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-foreground/25 hover:border-foreground hover:bg-foreground hover:text-background transition-all uppercase tracking-wider text-[10px] font-bold cursor-pointer min-w-[100px] justify-center rounded-none"
-                                >
-                                  {copiedId === file.short_id ? (
-                                    <>
-                                      <Check size={10} />
-                                      COPIED
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Copy size={10} />
-                                      COPY LINK
-                                    </>
-                                  )}
-                                </button>
-                                <button
-                                  onClick={() => handleTakedown(file.id)}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-foreground/25 hover:border-foreground hover:bg-foreground hover:text-background transition-all uppercase tracking-wider text-[10px] font-bold cursor-pointer min-w-[100px] justify-center rounded-none"
-                                >
-                                  TAKEDOWN
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                onClick={() => triggerShareModal(file)}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-foreground/25 hover:border-foreground hover:bg-foreground hover:text-background transition-all uppercase tracking-wider text-[10px] font-bold cursor-pointer min-w-[208px] justify-center rounded-none"
-                              >
-                                CREATE SHAREABLE LINK
-                              </button>
-                            )}
-                          </div>
+                      <td className="py-4 px-4 shrink-0 text-right relative">
+                        <div className="kebab-menu-container relative inline-block text-left">
                           <button
-                            onClick={() => handleDelete(file.id, file.storage_path)}
-                            disabled={deletingId === file.id}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-red-500/30 text-red-500 hover:bg-red-500 hover:text-white transition-all uppercase tracking-wider text-[10px] font-bold disabled:opacity-50 cursor-pointer min-w-[208px] justify-center rounded-none"
+                            onClick={() => {
+                              setActiveDropdownId(activeDropdownId === file.id ? null : file.id);
+                            }}
+                            className={`p-2 border transition-all cursor-pointer rounded-none inline-flex items-center justify-center ${
+                              activeDropdownId === file.id
+                                ? 'border-foreground bg-foreground text-background font-black'
+                                : 'border-foreground/25 text-foreground hover:border-foreground hover:bg-foreground/5'
+                            }`}
+                            title="File actions"
                           >
-                            <Trash2 size={10} />
-                            {deletingId === file.id ? 'DELETING...' : 'DELETE'}
+                            <MoreVertical size={14} />
                           </button>
+
+                          {activeDropdownId === file.id && (
+                            <div className="absolute right-0 top-full mt-1.5 z-20 w-48 border border-foreground bg-background shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] dark:shadow-[4px_4px_0px_0px_rgba(255,255,255,1)] py-1 animate-fade-in font-mono text-[10px] font-bold uppercase tracking-wider text-left">
+                              {file.is_accessible && (!file.expires_at || new Date().getTime() < new Date(file.expires_at).getTime()) ? (
+                                <>
+                                  {/* Copy Link Option */}
+                                  <button
+                                    onClick={() => {
+                                      handleCopyLink(file.short_id);
+                                      setActiveDropdownId(null);
+                                    }}
+                                    className="w-full px-4 py-2.5 text-left hover:bg-foreground hover:text-background transition-colors flex items-center gap-2 cursor-pointer"
+                                  >
+                                    <Copy size={12} />
+                                    {copiedId === file.short_id ? 'COPIED LINK' : 'COPY LINK'}
+                                  </button>
+
+                                  {/* Copy Password Option (if applicable) */}
+                                  {file.password && (
+                                    <button
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(file.password!);
+                                        triggerToast('PASSWORD COPIED');
+                                        setActiveDropdownId(null);
+                                      }}
+                                      className="w-full px-4 py-2.5 text-left hover:bg-foreground hover:text-background transition-colors flex items-center gap-2 cursor-pointer"
+                                    >
+                                      <Lock size={12} />
+                                      COPY PASSWORD
+                                    </button>
+                                  )}
+
+                                  {/* Takedown Option */}
+                                  <button
+                                    onClick={() => {
+                                      handleTakedown(file.id);
+                                      setActiveDropdownId(null);
+                                    }}
+                                    className="w-full px-4 py-2.5 text-left hover:bg-foreground hover:text-background transition-colors flex items-center gap-2 cursor-pointer border-b border-foreground/10"
+                                  >
+                                    <X size={12} />
+                                    TAKEDOWN LINK
+                                  </button>
+                                </>
+                              ) : (
+                                /* Create Shareable Link Option */
+                                <button
+                                  onClick={() => {
+                                    triggerShareModal(file);
+                                    setActiveDropdownId(null);
+                                  }}
+                                  className="w-full px-4 py-2.5 text-left hover:bg-foreground hover:text-background transition-colors flex items-center gap-2 cursor-pointer border-b border-foreground/10"
+                                >
+                                  <ExternalLink size={12} />
+                                  CREATE LINK
+                                </button>
+                              )}
+
+                              {/* Delete Option */}
+                              <button
+                                onClick={() => {
+                                  handleDelete(file.id, file.storage_path);
+                                  setActiveDropdownId(null);
+                                }}
+                                disabled={deletingId === file.id}
+                                className="w-full px-4 py-2.5 text-left text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                              >
+                                <Trash2 size={12} />
+                                {deletingId === file.id ? 'DELETING...' : 'DELETE FILE'}
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -523,6 +613,85 @@ export default function Dashboard({ files }: DashboardProps) {
                 <p className="text-[11px] text-muted-foreground uppercase leading-relaxed">
                   SELECT SHARING CONFIGURATION FOR THIS DOCUMENT. SCHEDULED LINKS WILL AUTOMATICALLY EXPIRE AND ACCESS WILL BE RESTRICTED.
                 </p>
+
+                {/* Privacy Toggle Section */}
+                <div className="space-y-3 border-t border-b border-foreground/10 py-4 my-2">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground block">
+                    / ACCESS PRIVACY
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPrivate(false);
+                        setModalPassword('');
+                      }}
+                      className={`py-2 px-3 border text-center transition-all text-xs font-bold uppercase tracking-wider cursor-pointer rounded-none ${
+                        !isPrivate
+                          ? 'border-foreground bg-foreground text-background font-black'
+                          : 'border-foreground/30 text-foreground hover:border-foreground'
+                      }`}
+                    >
+                      PUBLIC
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPrivate(true);
+                        if (!modalPassword) {
+                          const randomPass = Math.random().toString(36).substring(2, 10).toUpperCase();
+                          setModalPassword(randomPass);
+                        }
+                      }}
+                      className={`py-2 px-3 border text-center transition-all text-xs font-bold uppercase tracking-wider cursor-pointer rounded-none ${
+                        isPrivate
+                          ? 'border-foreground bg-foreground text-background font-black'
+                          : 'border-foreground/30 text-foreground hover:border-foreground'
+                      }`}
+                    >
+                      PRIVATE (PASSWORD)
+                    </button>
+                  </div>
+
+                  {isPrivate && (
+                    <div className="space-y-2 pt-2 animate-fade-in">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+                          SET SHARE PASSWORD
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const randomPass = Math.random().toString(36).substring(2, 10).toUpperCase();
+                            setModalPassword(randomPass);
+                            triggerToast('GENERATED NEW PASSWORD');
+                          }}
+                          className="text-[9px] font-bold text-foreground hover:underline uppercase tracking-wider flex items-center gap-1 cursor-pointer"
+                        >
+                          <RefreshCw size={10} />
+                          GENERATE
+                        </button>
+                      </div>
+                      <div className="relative flex items-center">
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          required
+                          value={modalPassword}
+                          onChange={(e) => setModalPassword(e.target.value)}
+                          placeholder="ENTER PASSWORD"
+                          className="w-full p-2.5 pr-10 border border-foreground/30 bg-background text-foreground text-xs rounded-none font-mono focus:outline-none focus:border-foreground"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 text-foreground/50 hover:text-foreground cursor-pointer"
+                        >
+                          {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 
                 <div className="space-y-3 pt-2">
                   <button
@@ -627,36 +796,76 @@ export default function Dashboard({ files }: DashboardProps) {
             )}
             
             {modalStep === 'success' && (
-              <div className="space-y-6 text-center py-4">
+              <div className="space-y-6 py-4">
                 <div className="flex justify-center mb-2">
                   <div className="p-3 border border-foreground rounded-none bg-foreground text-background">
                     <Check size={24} />
                   </div>
                 </div>
                 
-                <div className="space-y-1">
+                <div className="space-y-1 text-center">
                   <h3 className="text-xs text-foreground uppercase font-black tracking-widest">
                     LINK SUCCESSFULLY ACTIVATED
                   </h3>
                   <p className="text-[10px] text-muted-foreground uppercase font-mono">
-                    YOUR DOCUMENT IS NOW LIVE AND ACCESSIBLE PUBLICLY.
+                    YOUR DOCUMENT IS NOW LIVE AND SECURED WITH {isPrivate ? 'A PASSWORD' : 'PUBLIC ACCESS'}.
                   </p>
                 </div>
                 
-                <div className="p-3 border border-foreground/20 bg-foreground/[0.01] rounded-none font-mono text-[10px] break-all select-all text-left">
-                  {shareUrl}
+                {/* Shareable Link Block */}
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block">
+                    SHAREABLE URL
+                  </label>
+                  <div className="flex border border-foreground/30">
+                    <div className="flex-1 p-2.5 bg-foreground/[0.01] font-mono text-[10px] break-all select-all truncate align-middle">
+                      {shareUrl}
+                    </div>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(shareUrl);
+                        triggerToast('LINK COPIED TO CLIPBOARD');
+                      }}
+                      className="px-3 border-l border-foreground/30 bg-background text-foreground hover:bg-foreground hover:text-background transition-all text-[9px] font-bold uppercase cursor-pointer shrink-0 rounded-none"
+                    >
+                      COPY
+                    </button>
+                  </div>
                 </div>
+
+                {/* Shareable Password Block */}
+                {isPrivate && (
+                  <div className="space-y-1.5 animate-fade-in">
+                    <label className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground block">
+                      LINK PASSWORD
+                    </label>
+                    <div className="flex border border-foreground/30">
+                      <div className="flex-1 p-2.5 bg-foreground/[0.01] font-mono text-[10px] select-all font-bold tracking-wider text-foreground">
+                        {modalPassword}
+                      </div>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(modalPassword);
+                          setCopiedPassword(true);
+                          triggerToast('PASSWORD COPIED TO CLIPBOARD');
+                          setTimeout(() => setCopiedPassword(false), 2000);
+                        }}
+                        className="px-3 border-l border-foreground/30 bg-background text-foreground hover:bg-foreground hover:text-background transition-all text-[9px] font-bold uppercase cursor-pointer shrink-0 rounded-none flex items-center justify-center min-w-[60px]"
+                      >
+                        {copiedPassword ? 'COPIED' : 'COPY'}
+                      </button>
+                    </div>
+                  </div>
+                )}
                 
                 <div className="pt-2">
                   <button
                     onClick={() => {
-                      navigator.clipboard.writeText(shareUrl);
                       setModalOpen(false);
-                      triggerToast('LINK COPIED TO CLIPBOARD');
                     }}
-                    className="w-full py-3 border border-foreground bg-foreground text-background hover:bg-transparent hover:text-foreground transition-all text-xs font-bold uppercase tracking-widest cursor-pointer rounded-none"
+                    className="w-full py-3 border border-foreground bg-foreground text-background hover:bg-transparent hover:text-foreground transition-all text-xs font-bold uppercase tracking-widest cursor-pointer rounded-none text-center"
                   >
-                    COPY LINK & CLOSE
+                    CLOSE
                   </button>
                 </div>
               </div>

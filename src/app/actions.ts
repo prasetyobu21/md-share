@@ -383,12 +383,13 @@ export async function takedownFile(id: string): Promise<{ success: boolean; erro
   }
 }
 
-// Updates sharing state: is_accessible, expires_at, and timezone
+// Updates sharing state: is_accessible, expires_at, timezone, and password
 export async function updateSharingState(
   id: string,
   isAccessible: boolean,
   expiresAt: string | null,
-  timezone: string = 'GMT+7'
+  timezone: string = 'GMT+7',
+  password: string | null = null
 ): Promise<{ success: boolean; error?: string }> {
   // 1. Auth check
   const auth = await isAuthenticated();
@@ -403,6 +404,7 @@ export async function updateSharingState(
         is_accessible: isAccessible,
         expires_at: expiresAt,
         timezone: timezone,
+        password: password,
       })
       .eq('id', id);
 
@@ -418,4 +420,42 @@ export async function updateSharingState(
     return { success: false, error: err?.message || 'An unexpected error occurred.' };
   }
 }
+
+// Verifies password for a shareable link and sets a secure cookie if successful
+export async function verifySharePassword(
+  shortId: string,
+  password: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { data: fileMeta, error: dbError } = await supabaseServer
+      .from('files')
+      .select('password')
+      .eq('short_id', shortId)
+      .maybeSingle();
+
+    if (dbError || !fileMeta) {
+      return { success: false, error: 'Document not found.' };
+    }
+
+    if (fileMeta.password !== password) {
+      return { success: false, error: 'Incorrect password.' };
+    }
+
+    // Set secure cookie to store the unlocked state
+    const cookieStore = await cookies();
+    cookieStore.set(`share_pass_${shortId}`, password, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 60 * 60 * 24, // 24 hours access
+      path: '/',
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Unexpected password verification error:', err);
+    return { success: false, error: err?.message || 'An unexpected error occurred.' };
+  }
+}
+
 
