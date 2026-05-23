@@ -59,3 +59,11 @@ ON CONFLICT (id) DO NOTHING;
 -- which uses the Service Role Client to fetch raw data. Therefore, no public read/write 
 -- storage policies are required, securing the files completely from direct public download URLs.
 
+
+-- ==========================================
+-- MIGRATION FOR ADDING PASSWORD PROTECTION
+-- Run this in your Supabase SQL Editor if you are upgrading:
+-- ==========================================
+-- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS password TEXT NULL;
+
+
