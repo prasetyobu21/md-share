@@ -4,6 +4,7 @@ import React, { useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ExternalLink } from 'lucide-react';
+import MermaidRenderer from './MermaidRenderer';
 
 interface MarkdownRendererProps {
   markdownContent: string;
@@ -54,6 +55,23 @@ export default function MarkdownRenderer({ markdownContent, shortId }: MarkdownR
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          pre: ({ node, children, ...props }) => {
+            if (node) { /* no-op to bypass unused warning */ }
+            const codeEl = React.Children.toArray(children).find(
+              (child) => React.isValidElement(child) && child.type === 'code'
+            ) as React.ReactElement<{ className?: string; children?: React.ReactNode }> | undefined;
+
+            if (codeEl) {
+              const className = codeEl.props.className || '';
+              const match = /language-(\w+)/.exec(className);
+              if (match && match[1] === 'mermaid') {
+                const chart = String(codeEl.props.children || '').replace(/\n$/, '');
+                return <MermaidRenderer chart={chart} />;
+              }
+            }
+
+            return <pre {...props}>{children}</pre>;
+          },
           a: ({ href, children, ...props }) => {
             return (
               <a
