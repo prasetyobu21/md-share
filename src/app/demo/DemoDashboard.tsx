@@ -2,10 +2,34 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import Link from 'next/link';
-import { useDropzone } from 'react-dropzone';
-import { uploadMarkdownFile, deleteMarkdownFile, logout, takedownFile, updateSharingState, finalizeUploadWithImages } from '../actions';
-import { LogOut, Copy, Check, Trash2, FileText, Upload, ExternalLink, X, ChevronRight, Image as ImageIcon, AlertTriangle, Lock, Unlock, Eye, EyeOff, RefreshCw, MoreVertical } from 'lucide-react';
-import ThemeToggle from './ThemeToggle';
+import { useDropzone, FileRejection } from 'react-dropzone';
+import { 
+  getDemoFiles, 
+  uploadDemoMarkdownFile, 
+  finalizeDemoUploadWithImages, 
+  deleteDemoMarkdownFile,
+  takedownDemoFile,
+  updateDemoSharingState
+} from '../actions';
+import { 
+  LogOut, 
+  Copy, 
+  Check, 
+  Trash2, 
+  FileText, 
+  Upload, 
+  ExternalLink, 
+  X, 
+  ChevronRight, 
+  Image as ImageIcon, 
+  AlertTriangle, 
+  Lock, 
+  Eye, 
+  EyeOff, 
+  RefreshCw, 
+  MoreVertical 
+} from 'lucide-react';
+import ThemeToggle from '../components/ThemeToggle';
 
 interface FileRecord {
   id: string;
@@ -17,6 +41,7 @@ interface FileRecord {
   expires_at: string | null;
   timezone: string;
   password?: string | null;
+  demo_session_id?: string | null;
 }
 
 const TIMEZONES = [
@@ -28,11 +53,10 @@ const TIMEZONES = [
   { label: 'GMT-8 (Los Angeles, PST)', value: 'GMT-8', offset: -8 },
 ];
 
-interface DashboardProps {
-  files: FileRecord[];
-}
-
-export default function Dashboard({ files }: DashboardProps) {
+export default function DemoDashboard() {
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [files, setFiles] = useState<FileRecord[]>([]);
+  const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [uploadSuccess, setUploadSuccess] = useState('');
@@ -42,6 +66,18 @@ export default function Dashboard({ files }: DashboardProps) {
   // Delete Modal State
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [fileToDelete, setFileToDelete] = useState<FileRecord | null>(null);
+
+  // Upload limits count (excluding globally pinned templates)
+  const sessionFilesCount = files.filter(f => f.demo_session_id === sessionId).length;
+
+  // Sort files so that "About MD Share App.md" is always at the top (pinned)
+  const sortedFiles = [...files].sort((a, b) => {
+    const isAPinned = a.file_name.toLowerCase() === 'about md share app.md';
+    const isBPinned = b.file_name.toLowerCase() === 'about md share app.md';
+    if (isAPinned && !isBPinned) return -1;
+    if (!isAPinned && isBPinned) return 1;
+    return 0;
+  });
 
   // Modal State
   const [modalOpen, setModalOpen] = useState(false);
@@ -67,6 +103,55 @@ export default function Dashboard({ files }: DashboardProps) {
   // Kebab Dropdown State
   const [activeDropdownId, setActiveDropdownId] = useState<string | null>(null);
 
+  // Missing images intercept state
+  const [missingImagesModalOpen, setMissingImagesModalOpen] = useState(false);
+  const [missingImagesList, setMissingImagesList] = useState<string[]>([]);
+  const [providedImages, setProvidedImages] = useState<Record<string, File>>({});
+  const [interceptedFileMeta, setInterceptedFileMeta] = useState<{
+    shortId: string;
+    markdownContent: string;
+    fileName: string;
+  } | null>(null);
+  const [imagesUploading, setImagesUploading] = useState(false);
+  const [dragOverSlot, setDragOverSlot] = useState<string | null>(null);
+
+  // Initialize session ID
+  useEffect(() => {
+    let session = localStorage.getItem('demo_session_id');
+    if (!session) {
+      session = typeof crypto.randomUUID === 'function' 
+        ? crypto.randomUUID() 
+        : Math.random().toString(36).substring(2) + Date.now().toString(36);
+      localStorage.setItem('demo_session_id', session);
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSessionId(session);
+  }, []);
+
+  // Fetch session files
+  const loadFiles = useCallback(async (sid: string) => {
+    setLoading(true);
+    try {
+      const res = await getDemoFiles(sid);
+      if (res.success && res.files) {
+        setFiles(res.files as FileRecord[]);
+      } else {
+        console.error('Failed to load demo files:', res.error);
+      }
+    } catch (err) {
+      console.error('Error fetching demo files:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (sessionId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      loadFiles(sessionId);
+    }
+  }, [sessionId, loadFiles]);
+
   // Close dropdown on outside click
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
@@ -89,28 +174,21 @@ export default function Dashboard({ files }: DashboardProps) {
     setTimeout(() => setToastMessage(''), 2500);
   };
 
-  // Missing images intercept state
-  const [missingImagesModalOpen, setMissingImagesModalOpen] = useState(false);
-  const [missingImagesList, setMissingImagesList] = useState<string[]>([]);
-  const [providedImages, setProvidedImages] = useState<Record<string, File>>({});
-  const [interceptedFileMeta, setInterceptedFileMeta] = useState<{
-    shortId: string;
-    markdownContent: string;
-    fileName: string;
-  } | null>(null);
-  const [imagesUploading, setImagesUploading] = useState(false);
-  const [dragOverSlot, setDragOverSlot] = useState<string | null>(null);
-
-  const onDrop = useCallback(async (acceptedFiles: File[], fileRejections: any[]) => {
-    console.log('Client: onDrop triggered.', { acceptedFiles, fileRejections });
+  const onDrop = useCallback(async (acceptedFiles: File[], fileRejections: FileRejection[]) => {
+    if (!sessionId) return;
 
     if (fileRejections.length > 0) {
       const errorMsg = `FILE REJECTED: ${fileRejections[0].errors[0]?.message || 'Invalid file type'}. ONLY .MD FILES ARE ALLOWED.`;
-      console.warn('Client: File drop rejected:', errorMsg);
       setUploadError(errorMsg.toUpperCase());
       return;
     }
     if (acceptedFiles.length === 0) return;
+
+    if (sessionFilesCount >= 10) {
+      setUploadError('LIMIT REACHED: YOU CAN ONLY UPLOAD UP TO 10 FILES. PLEASE DELETE AN EXISTING FILE FIRST.');
+      return;
+    }
+
     setUploading(true);
     setUploadError('');
     setUploadSuccess('');
@@ -120,14 +198,12 @@ export default function Dashboard({ files }: DashboardProps) {
     formData.append('file', file);
 
     try {
-      console.log('Client: Uploading markdown file:', file.name);
-      const res = await uploadMarkdownFile(formData);
-      console.log('Client: Server response received:', res);
+      const res = await uploadDemoMarkdownFile(formData, sessionId);
 
       if (res.success) {
         setUploadSuccess(`SUCCESSFULLY UPLOADED: ${file.name}`);
+        loadFiles(sessionId);
       } else if (res.status === 'missing_images') {
-        console.log('Client: Intercepted missing images:', res.missingImages);
         if (res.missingImages && res.shortId && typeof res.markdownContent === 'string' && res.fileName) {
           setMissingImagesList(res.missingImages);
           setInterceptedFileMeta({
@@ -138,18 +214,18 @@ export default function Dashboard({ files }: DashboardProps) {
           setProvidedImages({});
           setMissingImagesModalOpen(true);
         } else {
-          console.warn('Client: Intercepted missing_images but some metadata fields were missing or invalid:', res);
           setUploadError(`UPLOAD INTERCEPTED BUT RESPONSE METADATA WAS INCOMPLETE.`);
         }
       } else {
         setUploadError(`UPLOAD FAILED: ${res.error || 'Unknown error'}`);
       }
-    } catch (err: any) {
-      setUploadError(`ERROR: ${err?.message || 'An error occurred during upload'}`);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'An error occurred during upload';
+      setUploadError(`ERROR: ${errorMsg}`);
     } finally {
       setUploading(false);
     }
-  }, []);
+  }, [sessionId, sessionFilesCount, loadFiles]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -160,7 +236,7 @@ export default function Dashboard({ files }: DashboardProps) {
       'application/octet-stream': ['.md'],
     },
     maxFiles: 1,
-    disabled: uploading,
+    disabled: uploading || sessionFilesCount >= 10,
   });
 
   const handleSelectImageForSlot = (imgName: string, file: File) => {
@@ -187,7 +263,7 @@ export default function Dashboard({ files }: DashboardProps) {
   };
 
   const handleFinalizeUpload = async () => {
-    if (!allImagesProvided || !interceptedFileMeta) return;
+    if (!sessionId || !allImagesProvided || !interceptedFileMeta) return;
 
     setImagesUploading(true);
     setUploadError('');
@@ -199,23 +275,24 @@ export default function Dashboard({ files }: DashboardProps) {
       formData.append('fileName', interceptedFileMeta.fileName);
       formData.append('markdownContent', interceptedFileMeta.markdownContent);
 
-      // Map provided images to their expected slot name in the formData payload!
       Object.entries(providedImages).forEach(([requiredName, file]) => {
         const renamedFile = new File([file], requiredName, { type: file.type });
         formData.append('images', renamedFile);
       });
 
-      const res = await finalizeUploadWithImages(formData);
+      const res = await finalizeDemoUploadWithImages(formData, sessionId);
       if (res.success) {
         setUploadSuccess(`SUCCESSFULLY UPLOADED: ${interceptedFileMeta.fileName} WITH ${Object.keys(providedImages).length} IMAGES`);
         setMissingImagesModalOpen(false);
         setProvidedImages({});
         setInterceptedFileMeta(null);
+        loadFiles(sessionId);
       } else {
         setUploadError(`UPLOAD FAILED: ${res.error || 'Unknown error'}`);
       }
-    } catch (err: any) {
-      setUploadError(`ERROR: ${err?.message || 'An error occurred during upload'}`);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'An error occurred during upload';
+      setUploadError(`ERROR: ${errorMsg}`);
     } finally {
       setImagesUploading(false);
     }
@@ -239,32 +316,39 @@ export default function Dashboard({ files }: DashboardProps) {
   };
 
   const handleConfirmDelete = async () => {
-    if (!fileToDelete || deletingId) return;
+    if (!sessionId || !fileToDelete || deletingId) return;
     setDeletingId(fileToDelete.id);
     try {
-      const res = await deleteMarkdownFile(fileToDelete.id, fileToDelete.storage_path);
+      const res = await deleteDemoMarkdownFile(fileToDelete.id, fileToDelete.storage_path, sessionId);
       if (res.success) {
         setDeleteModalOpen(false);
         setFileToDelete(null);
+        loadFiles(sessionId);
         triggerToast('FILE DELETED');
       } else {
         alert(`DELETE FAILED: ${res.error}`);
       }
-    } catch (err: any) {
-      alert(`DELETE ERROR: ${err?.message || 'An error occurred'}`);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'An error occurred';
+      alert(`DELETE ERROR: ${errorMsg}`);
     } finally {
       setDeletingId(null);
     }
   };
 
   const handleTakedown = async (id: string) => {
+    if (!sessionId) return;
     try {
-      const res = await takedownFile(id);
-      if (!res.success) {
+      const res = await takedownDemoFile(id, sessionId);
+      if (res.success) {
+        loadFiles(sessionId);
+        triggerToast('LINK TAKEN DOWN');
+      } else {
         alert(`TAKEDOWN FAILED: ${res.error}`);
       }
-    } catch (err: any) {
-      alert(`TAKEDOWN ERROR: ${err?.message || 'An error occurred'}`);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'An error occurred';
+      alert(`TAKEDOWN ERROR: ${errorMsg}`);
     }
   };
 
@@ -291,7 +375,7 @@ export default function Dashboard({ files }: DashboardProps) {
   };
 
   const handleShareForever = async () => {
-    if (!activeFile) return;
+    if (!sessionId || !activeFile) return;
     if (isPrivate && !modalPassword.trim()) {
       alert('PLEASE ENTER OR GENERATE A PASSWORD');
       return;
@@ -299,21 +383,23 @@ export default function Dashboard({ files }: DashboardProps) {
     setUpdatingState(true);
     try {
       const pwd = isPrivate ? modalPassword.trim() : null;
-      const res = await updateSharingState(activeFile.id, true, null, 'GMT+7', pwd);
+      const res = await updateDemoSharingState(activeFile.id, true, null, 'GMT+7', pwd, sessionId);
       if (res.success) {
         setModalStep('success');
+        loadFiles(sessionId);
       } else {
         alert(`FAILED TO ACTIVATE LINK: ${res.error}`);
       }
-    } catch (err: any) {
-      alert(`ERROR: ${err?.message || 'An error occurred'}`);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'An error occurred';
+      alert(`ERROR: ${errorMsg}`);
     } finally {
       setUpdatingState(false);
     }
   };
 
   const handleConfirmSchedule = async () => {
-    if (!activeFile || !expiresDate) return;
+    if (!sessionId || !activeFile || !expiresDate) return;
     if (isPrivate && !modalPassword.trim()) {
       alert('PLEASE ENTER OR GENERATE A PASSWORD');
       return;
@@ -341,29 +427,25 @@ export default function Dashboard({ files }: DashboardProps) {
       const utcTimestamp = utcDate.toISOString();
       const pwd = isPrivate ? modalPassword.trim() : null;
 
-      const res = await updateSharingState(activeFile.id, true, utcTimestamp, timezone, pwd);
+      const res = await updateDemoSharingState(activeFile.id, true, utcTimestamp, timezone, pwd, sessionId);
       if (res.success) {
         setModalStep('success');
+        loadFiles(sessionId);
       } else {
         alert(`FAILED TO ACTIVATE LINK: ${res.error}`);
       }
-    } catch (err: any) {
-      alert(`ERROR: ${err?.message || 'An error occurred'}`);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'An error occurred';
+      alert(`ERROR: ${errorMsg}`);
     } finally {
       setUpdatingState(false);
     }
   };
 
-  const handleCopySuccessLink = () => {
-    navigator.clipboard.writeText(shareUrl);
-    setCopiedId('success');
-    setTimeout(() => setCopiedId(null), 2000);
-  };
-
   const formatDate = (isoString: string) => {
     try {
       return new Date(isoString).toISOString().split('T')[0];
-    } catch (e) {
+    } catch {
       return 'N/A';
     }
   };
@@ -373,23 +455,37 @@ export default function Dashboard({ files }: DashboardProps) {
       {/* Header */}
       <header className="flex justify-between items-center border-b border-foreground pb-6 mb-12">
         <div>
-          <h1 className="text-2xl font-black tracking-widest uppercase">MD SHARE SITE</h1>
+          <h1 className="text-2xl font-black tracking-widest uppercase">MD SHARE SITE (DEMO)</h1>
           <p className="text-xs text-muted-foreground uppercase font-mono mt-1">Stark Minimalist Workspace</p>
         </div>
         <div className="flex items-center gap-4 animate-fade-in">
           <ThemeToggle />
-          <button
-            onClick={() => logout()}
+          <Link
+            href="/"
             className="flex items-center gap-2 px-4 py-2 border border-foreground/30 hover:border-foreground hover:bg-foreground hover:text-background transition-colors text-xs font-bold uppercase tracking-wider cursor-pointer"
           >
-            <LogOut size={14} />
-            LOGOUT
-          </button>
+            <LogOut size={14} className="rotate-180" />
+            EXIT DEMO
+          </Link>
         </div>
       </header>
 
       {/* Main Workspace */}
       <main className="space-y-12">
+        {/* Info Panel */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-foreground/5 border border-foreground/15 p-6 gap-4 animate-fade-in">
+          <div className="space-y-1">
+            <span className="text-xs font-black uppercase tracking-widest text-foreground block">SANDBOX SANDBOX ENVIRONMENT</span>
+            <p className="text-[10px] text-muted-foreground uppercase leading-relaxed font-mono">
+              Upload files privately without password authentication. Your files are isolated and stored using a session ID. Limit of 10 files.
+            </p>
+          </div>
+          <div className="text-left md:text-right shrink-0">
+            <span className="text-xl font-black font-mono block">{sessionFilesCount} / 10</span>
+            <p className="text-[9px] text-muted-foreground uppercase font-mono tracking-widest">FILES UPLOADED</p>
+          </div>
+        </div>
+
         {/* Upload Zone */}
         <div className="space-y-4">
           <h2 className="text-xs uppercase font-bold tracking-widest font-mono">
@@ -401,7 +497,7 @@ export default function Dashboard({ files }: DashboardProps) {
               isDragActive
                 ? 'border-foreground bg-foreground/5'
                 : 'border-foreground/30 hover:border-foreground hover:bg-foreground/[0.02]'
-            } ${uploading ? 'pointer-events-none opacity-50' : ''}`}
+            } ${uploading || sessionFilesCount >= 10 ? 'pointer-events-none opacity-50' : ''}`}
           >
             <input {...getInputProps()} />
             <div className="flex flex-col items-center justify-center space-y-4">
@@ -409,6 +505,10 @@ export default function Dashboard({ files }: DashboardProps) {
               {uploading ? (
                 <p className="text-xs font-mono uppercase tracking-wider animate-pulse">
                   UPLOADING FILE... PLEASE WAIT
+                </p>
+              ) : sessionFilesCount >= 10 ? (
+                <p className="text-xs font-mono uppercase tracking-wider text-red-500 font-bold">
+                  UPLOAD LIMIT REACHED (10/10). DELETE A FILE TO UPLOAD MORE.
                 </p>
               ) : isDragActive ? (
                 <p className="text-xs font-mono uppercase tracking-wider text-foreground">
@@ -451,7 +551,12 @@ export default function Dashboard({ files }: DashboardProps) {
             </span>
           </div>
 
-          {files.length === 0 ? (
+          {loading ? (
+            <div className="border border-dashed border-foreground/20 p-12 text-center text-xs text-muted-foreground uppercase font-mono flex items-center justify-center gap-2">
+              <RefreshCw size={14} className="animate-spin" />
+              LOADING SANDBOX FILES...
+            </div>
+          ) : files.length === 0 ? (
             <div className="border border-dashed border-foreground/20 p-12 text-center text-xs text-muted-foreground uppercase font-mono">
               NO FILES HAVE BEEN SHARED YET. UPLOAD A FILE ABOVE TO BEGIN.
             </div>
@@ -466,13 +571,18 @@ export default function Dashboard({ files }: DashboardProps) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-foreground/10">
-                  {files.map((file) => (
+                  {sortedFiles.map((file) => (
                     <tr
                       key={file.id}
                       className="hover:bg-foreground/[0.01] transition-colors group"
                     >
                       <td className="py-4 px-4 font-medium flex items-center gap-2 max-w-xs md:max-w-md truncate">
                         <FileText size={14} className="shrink-0 text-muted-foreground" />
+                        {file.file_name.toLowerCase() === 'about md share app.md' && (
+                          <span title="Pinned File (Cannot be deleted)" className="shrink-0 inline-flex items-center bg-foreground/5 dark:bg-foreground/10 px-1 py-0.5 text-[8px] border border-foreground/20 text-foreground/60 font-mono font-bold tracking-wider">
+                            PINNED
+                          </span>
+                        )}
                         {file.password && (
                           <span title="Password Protected Link" className="shrink-0 flex items-center">
                             <Lock size={12} className="text-foreground/70" />
@@ -542,10 +652,20 @@ export default function Dashboard({ files }: DashboardProps) {
                                   {/* Takedown Option */}
                                   <button
                                     onClick={() => {
+                                      if (file.file_name.toLowerCase() === 'about md share app.md') {
+                                        triggerToast('PINNED FILE CONFIG IS LOCKED');
+                                        setActiveDropdownId(null);
+                                        return;
+                                      }
                                       handleTakedown(file.id);
                                       setActiveDropdownId(null);
                                     }}
-                                    className="w-full px-4 py-2.5 text-left hover:bg-foreground hover:text-background transition-colors flex items-center gap-2 cursor-pointer border-b border-foreground/10"
+                                    disabled={file.file_name.toLowerCase() === 'about md share app.md'}
+                                    className={`w-full px-4 py-2.5 text-left transition-colors flex items-center gap-2 cursor-pointer border-b border-foreground/10 ${
+                                      file.file_name.toLowerCase() === 'about md share app.md'
+                                        ? 'text-foreground/40 cursor-not-allowed'
+                                        : 'hover:bg-foreground hover:text-background'
+                                    }`}
                                   >
                                     <X size={12} />
                                     TAKEDOWN LINK
@@ -555,10 +675,20 @@ export default function Dashboard({ files }: DashboardProps) {
                                 /* Create Shareable Link Option */
                                 <button
                                   onClick={() => {
+                                    if (file.file_name.toLowerCase() === 'about md share app.md') {
+                                      triggerToast('PINNED FILE CONFIG IS LOCKED');
+                                      setActiveDropdownId(null);
+                                      return;
+                                    }
                                     triggerShareModal(file);
                                     setActiveDropdownId(null);
                                   }}
-                                  className="w-full px-4 py-2.5 text-left hover:bg-foreground hover:text-background transition-colors flex items-center gap-2 cursor-pointer border-b border-foreground/10"
+                                  disabled={file.file_name.toLowerCase() === 'about md share app.md'}
+                                  className={`w-full px-4 py-2.5 text-left transition-colors flex items-center gap-2 cursor-pointer border-b border-foreground/10 ${
+                                    file.file_name.toLowerCase() === 'about md share app.md'
+                                      ? 'text-foreground/40 cursor-not-allowed'
+                                      : 'hover:bg-foreground hover:text-background'
+                                  }`}
                                 >
                                   <ExternalLink size={12} />
                                   CREATE LINK
@@ -568,10 +698,20 @@ export default function Dashboard({ files }: DashboardProps) {
                               {/* Delete Option */}
                               <button
                                 onClick={() => {
+                                  if (file.file_name.toLowerCase() === 'about md share app.md') {
+                                    triggerToast('PINNED FILE CANNOT BE DELETED');
+                                    setActiveDropdownId(null);
+                                    return;
+                                  }
                                   triggerDeleteModal(file);
                                   setActiveDropdownId(null);
                                 }}
-                                className="w-full px-4 py-2.5 text-left text-red-500 hover:bg-red-500 hover:text-white transition-colors flex items-center gap-2 cursor-pointer"
+                                disabled={file.file_name.toLowerCase() === 'about md share app.md'}
+                                className={`w-full px-4 py-2.5 text-left transition-colors flex items-center gap-2 cursor-pointer ${
+                                  file.file_name.toLowerCase() === 'about md share app.md'
+                                    ? 'text-red-500/40 cursor-not-allowed'
+                                    : 'text-red-500 hover:bg-red-500 hover:text-white'
+                                }`}
                               >
                                 <Trash2 size={12} />
                                 DELETE FILE
@@ -942,8 +1082,8 @@ export default function Dashboard({ files }: DashboardProps) {
         </div>
       )}
 
-      {/* Missing Images Modal */}
-      {missingImagesModalOpen && (
+      {/* Missing Images Intercept Modal */}
+      {missingImagesModalOpen && interceptedFileMeta && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-background border-2 border-foreground p-8 max-w-lg w-full rounded-none font-mono text-xs uppercase relative space-y-6 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] dark:shadow-[8px_8px_0px_0px_rgba(255,255,255,1)] animate-in fade-in zoom-in duration-200">
             {/* Modal Header */}

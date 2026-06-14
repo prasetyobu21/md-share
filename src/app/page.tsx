@@ -12,10 +12,11 @@ export default async function Home() {
     return <AuthWall />;
   }
 
-  // Fetch file metadata from Supabase
+  // Fetch file metadata from Supabase, filtering out demo files
   const { data: files } = await supabaseServer
     .from('files')
     .select('*')
+    .or('is_demo.is.null,is_demo.eq.false')
     .order('created_at', { ascending: false });
 
   return (

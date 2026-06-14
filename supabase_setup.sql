@@ -67,3 +67,11 @@ ON CONFLICT (id) DO NOTHING;
 -- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS password TEXT NULL;
 
 
+-- ==========================================
+-- MIGRATION FOR DEMO DASHBOARD
+-- Run this in your Supabase SQL Editor:
+-- ==========================================
+-- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS is_demo BOOLEAN DEFAULT false;
+-- ALTER TABLE public.files ADD COLUMN IF NOT EXISTS demo_session_id TEXT NULL;
+-- UPDATE public.files SET is_demo = false WHERE is_demo IS NULL;
+-- CREATE INDEX IF NOT EXISTS idx_files_demo_session_id ON public.files(demo_session_id);

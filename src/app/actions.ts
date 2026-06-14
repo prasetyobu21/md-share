@@ -458,4 +458,453 @@ export async function verifySharePassword(
   }
 }
 
+// ==========================================
+// DEMO DASHBOARD SERVER ACTIONS
+// ==========================================
+
+// 1. Fetch files for a specific demo session
+export async function getDemoFiles(demoSessionId: string): Promise<{ success: boolean; files?: unknown[]; error?: string }> {
+  if (!demoSessionId || typeof demoSessionId !== 'string') {
+    return { success: false, error: 'Invalid session ID.' };
+  }
+  try {
+    const { data: files, error } = await supabaseServer
+      .from('files')
+      .select('*')
+      .eq('is_demo', true)
+      .or(`demo_session_id.eq.${demoSessionId},file_name.eq.About MD Share App.md`)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching demo files:', error);
+      return { success: false, error: error.message };
+    }
+    return { success: true, files: files || [] };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'Unexpected error fetching demo files.';
+    return { success: false, error: errorMsg };
+  }
+}
+
+// 2. Upload markdown file for a specific demo session (with 10-file limit check)
+export async function uploadDemoMarkdownFile(
+  formData: FormData,
+  demoSessionId: string
+): Promise<{
+  success: boolean;
+  status?: 'missing_images' | 'completed';
+  missingImages?: string[];
+  shortId?: string;
+  markdownContent?: string;
+  fileName?: string;
+  error?: string;
+}> {
+  if (!demoSessionId || typeof demoSessionId !== 'string') {
+    return { success: false, error: 'Invalid session ID.' };
+  }
+
+  // 10-file limit check
+  try {
+    const { count, error: countError } = await supabaseServer
+      .from('files')
+      .select('*', { count: 'exact', head: true })
+      .eq('is_demo', true)
+      .eq('demo_session_id', demoSessionId);
+
+    if (countError) {
+      console.error('Count query error:', countError);
+      return { success: false, error: 'Failed to verify file upload limit.' };
+    }
+
+    if (count !== null && count >= 10) {
+      return { success: false, error: 'LIMIT REACHED: YOU CAN ONLY UPLOAD UP TO 10 FILES. PLEASE DELETE AN EXISTING FILE FIRST.' };
+    }
+  } catch (err) {
+    console.error('Failed to verify file upload limit:', err);
+    return { success: false, error: 'Failed to verify file upload limit.' };
+  }
+
+  // Extract and validate file
+  const file = formData.get('file') as File | null;
+  if (!file) {
+    return { success: false, error: 'No file provided.' };
+  }
+
+  if (!file.name.endsWith('.md')) {
+    return { success: false, error: 'Only .md files are allowed.' };
+  }
+
+  try {
+    const textContent = await file.text();
+    const localImages = scanForLocalImages(textContent);
+
+    if (localImages.length > 0) {
+      return {
+        success: false,
+        status: 'missing_images',
+        missingImages: localImages.map(img => img.filename),
+        shortId: generateShortId(),
+        markdownContent: textContent,
+        fileName: file.name,
+      };
+    }
+
+    const shortId = generateShortId();
+    const storagePath = `${shortId}.md`;
+
+    // Upload to private Supabase bucket 'md-files'
+    const { error: uploadError } = await supabaseServer.storage
+      .from('md-files')
+      .upload(storagePath, textContent, {
+        contentType: 'text/markdown',
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      console.error('Storage upload error:', uploadError);
+      return { success: false, error: `Storage upload failed: ${uploadError.message}` };
+    }
+
+    // Insert record into PostgreSQL files table
+    const { error: dbError } = await supabaseServer
+      .from('files')
+      .insert({
+        short_id: shortId,
+        file_name: file.name,
+        storage_path: storagePath,
+        is_demo: true,
+        demo_session_id: demoSessionId,
+        is_accessible: true,
+      });
+
+    if (dbError) {
+      console.error('Database insertion error:', dbError);
+      await supabaseServer.storage.from('md-files').remove([storagePath]);
+      return { success: false, error: `Database insertion failed: ${dbError.message}` };
+    }
+
+    return { success: true, status: 'completed' };
+  } catch (err) {
+    console.error('Unexpected upload error:', err);
+    const errorMsg = err instanceof Error ? err.message : 'An unexpected error occurred during upload.';
+    return { success: false, error: errorMsg };
+  }
+}
+
+// 3. Finalize demo upload with images
+export async function finalizeDemoUploadWithImages(
+  formData: FormData,
+  demoSessionId: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!demoSessionId || typeof demoSessionId !== 'string') {
+    return { success: false, error: 'Invalid session ID.' };
+  }
+
+  // 10-file limit check
+  try {
+    const { count, error: countError } = await supabaseServer
+      .from('files')
+      .select('*', { count: 'exact', head: true })
+      .eq('is_demo', true)
+      .eq('demo_session_id', demoSessionId);
+
+    if (countError) {
+      return { success: false, error: 'Failed to verify file upload limit.' };
+    }
+
+    if (count !== null && count >= 10) {
+      return { success: false, error: 'LIMIT REACHED: YOU CAN ONLY UPLOAD UP TO 10 FILES. PLEASE DELETE AN EXISTING FILE FIRST.' };
+    }
+  } catch {
+    return { success: false, error: 'Failed to verify file upload limit.' };
+  }
+
+  const shortId = formData.get('shortId') as string;
+  const fileName = formData.get('fileName') as string;
+  const markdownContent = formData.get('markdownContent') as string;
+
+  if (!shortId || !fileName || !markdownContent) {
+    return { success: false, error: 'Missing required upload parameters.' };
+  }
+
+  const imageFiles = formData.getAll('images') as File[];
+
+  try {
+    const imageUrls: Record<string, string> = {};
+    const uploadedStoragePaths: string[] = [];
+
+    // Ensure shares bucket exists
+    try {
+      const { data: buckets } = await supabaseServer.storage.listBuckets();
+      if (!buckets?.some(b => b.name === 'shares')) {
+        await supabaseServer.storage.createBucket('shares', {
+          public: true,
+          allowedMimeTypes: ['image/*'],
+        });
+      }
+    } catch (bucketErr) {
+      console.warn('Failed to ensure bucket exists:', bucketErr);
+    }
+
+    for (const imageFile of imageFiles) {
+      const originalFilename = imageFile.name;
+      const arrayBuffer = await imageFile.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      
+      let webpBuffer: Buffer;
+      let isConverted = false;
+
+      try {
+        const isSvg = originalFilename.toLowerCase().endsWith('.svg');
+        if (!isSvg) {
+          webpBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
+          isConverted = true;
+        } else {
+          webpBuffer = buffer;
+        }
+      } catch {
+        webpBuffer = buffer;
+      }
+
+      const baseName = originalFilename.substring(0, originalFilename.lastIndexOf('.')) || originalFilename;
+      const finalFilename = isConverted ? `${baseName}.webp` : originalFilename;
+      const contentType = isConverted ? 'image/webp' : imageFile.type;
+      const imagePath = `${shortId}/${finalFilename}`;
+
+      const { error: imgUploadError } = await supabaseServer.storage
+        .from('shares')
+        .upload(imagePath, webpBuffer, {
+          contentType: contentType,
+          cacheControl: '31536000',
+          upsert: true,
+        });
+
+      if (imgUploadError) {
+        return { success: false, error: `Image upload failed for ${finalFilename}: ${imgUploadError.message}` };
+      }
+
+      uploadedStoragePaths.push(imagePath);
+
+      const { data: publicUrlData } = supabaseServer.storage
+        .from('shares')
+        .getPublicUrl(imagePath);
+
+      imageUrls[originalFilename] = publicUrlData.publicUrl;
+    }
+
+    const rewrittenMarkdown = rewriteMarkdownImages(markdownContent, imageUrls);
+    const storagePath = `${shortId}.md`;
+
+    const { error: uploadError } = await supabaseServer.storage
+      .from('md-files')
+      .upload(storagePath, rewrittenMarkdown, {
+        contentType: 'text/markdown',
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      return { success: false, error: `Storage upload failed: ${uploadError.message}` };
+    }
+
+    const { error: dbError } = await supabaseServer
+      .from('files')
+      .insert({
+        short_id: shortId,
+        file_name: fileName,
+        storage_path: storagePath,
+        is_demo: true,
+        demo_session_id: demoSessionId,
+        is_accessible: true,
+      });
+
+    if (dbError) {
+      await supabaseServer.storage.from('md-files').remove([storagePath]);
+      if (uploadedStoragePaths.length > 0) {
+        await supabaseServer.storage.from('shares').remove(uploadedStoragePaths);
+      }
+      return { success: false, error: `Database insertion failed: ${dbError.message}` };
+    }
+
+    return { success: true };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'An unexpected error occurred.';
+    return { success: false, error: errorMsg };
+  }
+}
+
+// 4. Delete demo markdown file
+export async function deleteDemoMarkdownFile(
+  id: string,
+  storagePath: string,
+  demoSessionId: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!demoSessionId || typeof demoSessionId !== 'string') {
+    return { success: false, error: 'Invalid session ID.' };
+  }
+
+  try {
+    const { data: fileMeta, error: fetchError } = await supabaseServer
+      .from('files')
+      .select('file_name, is_demo, demo_session_id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchError || !fileMeta) {
+      return { success: false, error: 'File not found.' };
+    }
+
+    if (fileMeta.file_name.toLowerCase() === 'about md share app.md') {
+      return { success: false, error: 'The demo article is pinned and cannot be deleted.' };
+    }
+
+    if (!fileMeta.is_demo || fileMeta.demo_session_id !== demoSessionId) {
+      return { success: false, error: 'Unauthorized deletion.' };
+    }
+
+    // Remove file from storage
+    const { error: storageError } = await supabaseServer.storage
+      .from('md-files')
+      .remove([storagePath]);
+
+    if (storageError) {
+      console.error('Storage delete error:', storageError);
+    }
+
+    const shortId = storagePath.replace(/\.md$/, '');
+    try {
+      const { data: filesInFolder, error: listError } = await supabaseServer.storage
+        .from('shares')
+        .list(shortId);
+
+      if (filesInFolder && filesInFolder.length > 0 && !listError) {
+        const pathsToDelete = filesInFolder.map(f => `${shortId}/${f.name}`);
+        await supabaseServer.storage.from('shares').remove(pathsToDelete);
+      }
+    } catch (err) {
+      console.error('Failed to clean up images from shares storage:', err);
+    }
+
+    // Remove record from database
+    const { error: dbError } = await supabaseServer
+      .from('files')
+      .delete()
+      .eq('id', id);
+
+    if (dbError) {
+      return { success: false, error: `Database deletion failed: ${dbError.message}` };
+    }
+
+    return { success: true };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'An unexpected error occurred.';
+    return { success: false, error: errorMsg };
+  }
+}
+
+// 5. Takedown demo file (flips is_accessible to false and clears expires_at)
+export async function takedownDemoFile(
+  id: string,
+  demoSessionId: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!demoSessionId || typeof demoSessionId !== 'string') {
+    return { success: false, error: 'Invalid session ID.' };
+  }
+
+  try {
+    // Verify ownership
+    const { data: fileMeta, error: fetchError } = await supabaseServer
+      .from('files')
+      .select('file_name, is_demo, demo_session_id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchError || !fileMeta) {
+      return { success: false, error: 'File not found.' };
+    }
+
+    if (fileMeta.file_name.toLowerCase() === 'about md share app.md') {
+      return { success: false, error: 'The demo article is pinned and its share configuration cannot be modified.' };
+    }
+
+    if (!fileMeta.is_demo || fileMeta.demo_session_id !== demoSessionId) {
+      return { success: false, error: 'Unauthorized operation.' };
+    }
+
+    const { error: dbError } = await supabaseServer
+      .from('files')
+      .update({
+        is_accessible: false,
+        expires_at: null,
+      })
+      .eq('id', id);
+
+    if (dbError) {
+      console.error('Database takedown error:', dbError);
+      return { success: false, error: `Database update failed: ${dbError.message}` };
+    }
+
+    return { success: true };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'An unexpected error occurred.';
+    return { success: false, error: errorMsg };
+  }
+}
+
+// 6. Update demo sharing state: is_accessible, expires_at, timezone, and password
+export async function updateDemoSharingState(
+  id: string,
+  isAccessible: boolean,
+  expiresAt: string | null,
+  timezone: string = 'GMT+7',
+  password: string | null = null,
+  demoSessionId: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!demoSessionId || typeof demoSessionId !== 'string') {
+    return { success: false, error: 'Invalid session ID.' };
+  }
+
+  try {
+    // Verify ownership
+    const { data: fileMeta, error: fetchError } = await supabaseServer
+      .from('files')
+      .select('file_name, is_demo, demo_session_id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchError || !fileMeta) {
+      return { success: false, error: 'File not found.' };
+    }
+
+    if (fileMeta.file_name.toLowerCase() === 'about md share app.md') {
+      return { success: false, error: 'The demo article is pinned and its share configuration cannot be modified.' };
+    }
+
+    if (!fileMeta.is_demo || fileMeta.demo_session_id !== demoSessionId) {
+      return { success: false, error: 'Unauthorized operation.' };
+    }
+
+    const { error: dbError } = await supabaseServer
+      .from('files')
+      .update({
+        is_accessible: isAccessible,
+        expires_at: expiresAt,
+        timezone: timezone,
+        password: password,
+      })
+      .eq('id', id);
+
+    if (dbError) {
+      console.error('Database update sharing state error:', dbError);
+      return { success: false, error: `Database update failed: ${dbError.message}` };
+    }
+
+    return { success: true };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'An unexpected error occurred.';
+    return { success: false, error: errorMsg };
+  }
+}
+
 

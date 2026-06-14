@@ -256,7 +256,7 @@ export default async function ReaderPage({ params }: PageProps) {
         {/* Dynamic Reader Footer */}
         <footer className="border-t border-foreground/15 pt-8 text-center">
           <p className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest">
-            POWERED BY MD SHARE SITE • SECURED STORAGE BUCKETS
+            POWERED BY PRASETYO UTOMO • SECURED STORAGE BUCKETS
           </p>
         </footer>
       </div>
